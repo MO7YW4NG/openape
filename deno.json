@@ -1,6 +1,6 @@
 {
   "name": "@openape/openape",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "CLI tool for CYCU i-Learning platform",
   "license": "MIT",
   "exports": "./src/index.ts",
@@ -10,6 +10,7 @@
     "build:npm": "deno run -A src/build_npm.ts"
   },
   "imports": {
+    "@deno/dnt": "jsr:@deno/dnt@^0.42.3",
     "commander": "npm:commander@^12.1.0",
     "playwright-core": "npm:playwright-core@^1.48.0",
     "node-html-parser": "npm:node-html-parser@^6.1.13"

@@ -1,7 +1,7 @@
 import { getBaseDir } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCourses, getEnrolledCoursesApi, getQuizzesInCourse, getQuizzesByCoursesApi } from "../lib/moodle.ts";
+import { getEnrolledCoursesApi, getQuizzesByCoursesApi } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
 import { launchAuthenticated } from "../lib/auth.ts";
 import { extractSessionInfo } from "../lib/session.ts";
@@ -35,12 +35,15 @@ export function registerQuizzesCommand(program: Command): void {
 
     // Check if session exists
     if (!fs.existsSync(sessionPath)) {
+      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
+      log.info(`Session 預期位置: ${sessionPath}`);
       return null;
     }
 
     // Try to load WS token
     const wsToken = loadWsToken(sessionPath);
     if (!wsToken) {
+      log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
       return null;
     }
 
@@ -53,7 +56,7 @@ export function registerQuizzesCommand(program: Command): void {
     };
   }
 
-  // Helper function to create session context
+  // Helper function to create session context (for open command only)
   async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
     log: Logger;
     page: import("playwright-core").Page;
@@ -61,9 +64,7 @@ export function registerQuizzesCommand(program: Command): void {
     browser: any;
     context: any;
   } | null> {
-    // Get global options if command is provided (for --verbose, --silent flags)
     const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    // Auto-enable silent mode for JSON output (unless --verbose is also set)
     const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
     const silent = outputFormat === "json" && !opts.verbose;
     const log = createLogger(opts.verbose, silent);
@@ -108,49 +109,20 @@ export function registerQuizzesCommand(program: Command): void {
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (courseId, options, command) => {
       const output: OutputFormat = getOutputFormat(command);
-
-      // Try pure API mode (no browser, fast!)
       const apiContext = await createApiContext(options, command);
-      if (apiContext) {
-        try {
-          const quizzes = await getQuizzesByCoursesApi(apiContext.session, [parseInt(courseId, 10)]);
-
-          // Filter by available only if requested (API returns all, no completion status)
-          // Note: API doesn't provide completion status, so --available-only won't work in API mode
-          if (options.availableOnly) {
-            apiContext.log.warn("--available-only is not supported in API mode, showing all quizzes");
-          }
-
-          formatAndOutput(quizzes as unknown as Record<string, unknown>[], output, apiContext.log);
-          return;
-        } catch (e) {
-          // API failed, fall through to browser mode
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error(`// API mode failed: ${msg}, trying browser mode...`);
-        }
-      }
-
-      // Fallback to browser mode
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      const quizzes = await getQuizzesByCoursesApi(apiContext.session, [parseInt(courseId, 10)]);
 
-      try {
-        const quizzes = await getQuizzesInCourse(page, session, parseInt(courseId, 10), log);
-
-        let filteredQuizzes = quizzes;
-        if (options.availableOnly) {
-          filteredQuizzes = quizzes.filter(q => !q.isComplete);
-        }
-
-        formatAndOutput(filteredQuizzes as unknown as Record<string, unknown>[], output, log);
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
+      // Note: API doesn't provide completion status, so --available-only shows all
+      if (options.availableOnly) {
+        apiContext.log.warn("--available-only is not supported in API mode, showing all quizzes");
       }
+
+      formatAndOutput(quizzes as unknown as Record<string, unknown>[], output, apiContext.log);
     });
 
   quizzesCmd
@@ -160,80 +132,40 @@ export function registerQuizzesCommand(program: Command): void {
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
       const output: OutputFormat = getOutputFormat(command);
-
-      // Try pure API mode (no browser, fast!)
       const apiContext = await createApiContext(options, command);
-      if (apiContext) {
-        try {
-          const classification = options.level === "all" ? undefined : "inprogress";
-          const courses = await getEnrolledCoursesApi(apiContext.session, {
-            classification,
-          });
-
-          // Get quizzes via WS API (no browser needed!)
-          const courseIds = courses.map(c => c.id);
-          const apiQuizzes = await getQuizzesByCoursesApi(apiContext.session, courseIds);
-
-          // Build a map of courseId -> course for quick lookup
-          const courseMap = new Map(courses.map(c => [c.id, c]));
-
-          const allQuizzes: Array<{ courseName: string; name: string; url: string; cmid: string; isComplete: boolean }> = [];
-          for (const q of apiQuizzes) {
-            const course = courseMap.get(q.courseId);
-            if (course) {
-              allQuizzes.push({
-                courseName: course.fullname,
-                name: q.name,
-                url: q.url,
-                cmid: q.cmid,
-                isComplete: q.isComplete,
-              });
-            }
-          }
-
-          apiContext.log.info(`\n總計發現 ${allQuizzes.length} 個測驗。`);
-          formatAndOutput(allQuizzes as unknown as Record<string, unknown>[], output, apiContext.log);
-          return;
-        } catch (e) {
-          // API failed, fall through to browser mode
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error(`// API mode failed: ${msg}, trying browser mode...`);
-        }
-      }
-
-      // Fallback to browser mode
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      const classification = options.level === "all" ? undefined : "inprogress";
+      const courses = await getEnrolledCoursesApi(apiContext.session, {
+        classification,
+      });
 
-      try {
-        const classification = options.level === "all" ? undefined : "inprogress";
-        const courses = await getEnrolledCourses(page, session, log, { classification });
+      // Get quizzes via WS API (no browser needed!)
+      const courseIds = courses.map(c => c.id);
+      const apiQuizzes = await getQuizzesByCoursesApi(apiContext.session, courseIds);
 
-        const allQuizzes: Array<{ courseName: string; name: string; url: string; cmid: string; isComplete: boolean }> = [];
+      // Build a map of courseId -> course for quick lookup
+      const courseMap = new Map(courses.map(c => [c.id, c]));
 
-        for (const course of courses) {
-          const quizzes = await getQuizzesInCourse(page, session, course.id, log);
-          for (const q of quizzes) {
-            allQuizzes.push({
-              courseName: course.fullname,
-              name: q.name,
-              url: q.url,
-              cmid: q.cmid,
-              isComplete: q.isComplete,
-            });
-          }
+      const allQuizzes: Array<{ courseName: string; name: string; url: string; cmid: string; isComplete: boolean }> = [];
+      for (const q of apiQuizzes) {
+        const course = courseMap.get(q.courseId);
+        if (course) {
+          allQuizzes.push({
+            courseName: course.fullname,
+            name: q.name,
+            url: q.url,
+            cmid: q.cmid,
+            isComplete: q.isComplete,
+          });
         }
-
-        log.info(`\n總計發現 ${allQuizzes.length} 個測驗。`);
-        formatAndOutput(allQuizzes as unknown as Record<string, unknown>[], output, log);
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
       }
+
+      apiContext.log.info(`\n總計發現 ${allQuizzes.length} 個測驗。`);
+      formatAndOutput(allQuizzes as unknown as Record<string, unknown>[], output, apiContext.log);
     });
 
   quizzesCmd

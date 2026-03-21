@@ -1,12 +1,12 @@
 import type { Page } from "playwright-core";
 import { parse } from "node-html-parser";
+import { stripHtmlTags, extractCourseName } from "./utils.ts";
 import type {
   SessionInfo,
   Logger,
   EnrolledCourse,
   SuperVideoModule,
   QuizModule,
-  ForumModule,
   ResourceModule,
   ForumDiscussion,
   ForumPost,
@@ -198,7 +198,7 @@ export async function getEnrolledCoursesApi(
 
   return (data?.courses ?? []).map((c: any) => ({
     id: c.id,
-    fullname: c.fullname,
+    fullname: extractCourseName(c.fullname),
     shortname: c.shortname,
     idnumber: c.idnumber,
     category: c.category?.name,
@@ -244,7 +244,7 @@ export async function getEnrolledCourses(
 
   const courses: EnrolledCourse[] = (data?.courses ?? []).map((c: any) => ({
     id: c.id,
-    fullname: c.fullname,
+    fullname: extractCourseName(c.fullname),
     shortname: c.shortname,
     idnumber: c.idnumber,
     category: c.category?.name,
@@ -322,109 +322,7 @@ export async function getSupervideosInCourse(
   }));
 }
 
-// ── Quiz Operations ───────────────────────────────────────────────────────
-
-/**
- * Get all Quiz modules in a course.
- */
-export async function getQuizzesInCourse(
-  page: Page,
-  session: SessionInfo,
-  courseId: number,
-  log: Logger
-): Promise<QuizModule[]> {
-  const state = await getCourseState(page, session, courseId);
-  const cms: any[] = state?.cm ?? [];
-
-  const allQuizzes = cms.filter((cm: any) => cm.module === "quiz");
-  const available = allQuizzes.filter(
-    (cm: any) => !("isoverallcomplete" in cm) || !cm.isoverallcomplete
-  );
-
-  log.debug(
-    `  Quiz: ${allQuizzes.length} total, ${available.length} available`
-  );
-
-  return available.map((cm: any) => ({
-    cmid: cm.cmid?.toString() ?? cm.id?.toString() ?? "",
-    name: cm.name,
-    url: cm.url,
-    isComplete: !!cm.isoverallcomplete,
-    timeOpen: cm.timeopen,
-    timeClose: cm.timeclose,
-  }));
-}
-
 // ── Forum Operations ──────────────────────────────────────────────────────
-
-/**
- * Get all forum modules in a course.
- * If WS token is available, fetches forum IDs directly via WS API.
- */
-export async function getForumsInCourse(
-  page: Page,
-  session: SessionInfo,
-  courseId: number,
-  log: Logger
-): Promise<ForumModule[]> {
-  // First get basic forum info from course state
-  const state = await getCourseState(page, session, courseId);
-  const cms: any[] = state?.cm ?? [];
-  const forums = cms.filter((cm: any) => cm.module === "forum");
-
-  log.debug(`  Found ${forums.length} forum${forums.length === 1 ? "" : "s"}.`);
-
-  const result: ForumModule[] = forums.map((cm: any) => ({
-    cmid: cm.cmid?.toString() ?? cm.id?.toString() ?? "",
-    forumId: 0,
-    name: cm.name,
-    url: cm.url,
-    courseId,
-    forumType: cm.modname,
-  }));
-
-  // If WS token is available, fetch forum IDs directly
-  if (session.wsToken && forums.length > 0) {
-    try {
-      const wsForums = await moodleAjax<any[]>(
-        page,
-        session,
-        "mod_forum_get_forums_by_courses",
-        { courseids: [courseId] }
-      );
-
-      // Create maps for lookup by different fields
-      const byId = new Map<number, number>(); // cmid -> forum id
-      const byName = new Map<string, number>(); // name -> forum id
-
-      for (const wsForum of wsForums || []) {
-        if (wsForum.cmid) {
-          byId.set(wsForum.cmid, wsForum.id);
-        }
-        if (wsForum.name) {
-          byName.set(wsForum.name, wsForum.id);
-        }
-      }
-
-      // Merge forum IDs into result
-      for (const forum of result) {
-        const cmid = parseInt(forum.cmid, 10);
-        if (byId.has(cmid)) {
-          forum.forumId = byId.get(cmid)!;
-        } else if (byName.has(forum.name)) {
-          forum.forumId = byName.get(forum.name)!;
-        }
-      }
-
-      const matchedCount = result.filter(f => f.forumId > 0).length;
-      log.debug(`  WS API provided forum IDs for ${matchedCount}/${result.length} forums.`);
-    } catch (e) {
-      log.debug(`  WS API forum lookup failed: ${e instanceof Error ? e.message : String(e)}`);
-    }
-  }
-
-  return result;
-}
 
 /**
  * Get all forums via pure WS API (no browser required).
@@ -449,182 +347,66 @@ export async function getForumsApi(
 }
 
 /**
- * Extract forum ID from forum page.
- * First tries to find it in embedded page data, then falls back to
- * extracting it from discussion posts API.
+ * Get discussions in a forum via WS API (no browser required).
+ * Uses mod_forum_get_forum_discussions
  */
-export async function getForumIdFromPage(
-  page: Page,
-  cmid: number,
-  session?: SessionInfo
-): Promise<number | null> {
-  try {
-    await page.goto(
-      `https://ilearning.cycu.edu.tw/mod/forum/view.php?id=${cmid}`,
-      { waitUntil: "domcontentloaded", timeout: 30000 }
-    );
-
-    // First try: extract from page HTML
-    const forumId = await page.evaluate(() => {
-      // Try multiple patterns to find the forum ID
-      const patterns = [
-        /"forumid":(\d+)/,
-        /"forumId":(\d+)/,
-        /forumid=(\d+)/,
-        /data-forum-id="(\d+)"/,
-      ];
-
-      const html = document.body.innerHTML;
-      for (const pattern of patterns) {
-        const match = html.match(pattern);
-        if (match) return parseInt(match[1], 10);
-      }
-
-      // Try to find it in a script tag with forum configuration
-      const scripts = Array.from(document.querySelectorAll('script'));
-      for (const script of scripts) {
-        const text = script.textContent || '';
-        const match = text.match(/"forumid":(\d+)/);
-        if (match) return parseInt(match[1], 10);
-      }
-
-      // Try to find from discussion links - extract from API data embedded in page
-      const discussLinks = Array.from(document.querySelectorAll('a[href*="discuss.php"]'));
-      for (const link of discussLinks) {
-        const href = (link as HTMLAnchorElement).href;
-        // The discussion page might have forum info
-        const dMatch = href.match(/d=(\d+)/);
-        if (dMatch) {
-          // Try to find parent element with forum data
-          let parent = link.parentElement;
-          let depth = 0;
-          while (parent && depth < 10) {
-            const parentHtml = parent.innerHTML;
-            const fMatch = parentHtml.match(/"forum":(\d+)/);
-            if (fMatch) return parseInt(fMatch[1], 10);
-            parent = parent.parentElement;
-            depth++;
-          }
-        }
-      }
-
-      return null;
-    });
-
-    if (forumId) return forumId;
-
-    // Fallback: if session is provided, try to get instance ID from discussion posts
-    if (session) {
-      // Get first discussion ID from page
-      const firstDiscussionId = await page.evaluate(() => {
-        const link = document.querySelector('a[href*="discuss.php"]');
-        if (!link) return null;
-        const href = (link as HTMLAnchorElement).href;
-        const match = href.match(/d=(\d+)/);
-        return match ? parseInt(match[1], 10) : null;
-      });
-
-      if (firstDiscussionId) {
-        // Try to get posts and extract forum ID from response
-        const data = await moodleAjax<{ posts?: unknown[] }>(
-          page,
-          session,
-          "mod_forum_get_forum_discussion_posts",
-          {
-            discussionid: firstDiscussionId,
-          }
-        );
-
-        if (data?.posts && data.posts.length > 0) {
-          const firstPost = data.posts[0] as any;
-          if (firstPost.forum) {
-            return firstPost.forum;
-          }
-        }
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
+export async function getForumDiscussionsApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  forumId: number,
+  options?: {
+    sortorder?: number; // 1=oldest first, 2=newest first, 3=most recently modified
+    page?: number;
+    perpage?: number;
+    groupid?: number;
   }
-}
-
-/**
- * Get forums by course IDs via AJAX.
- * Returns forum instance IDs directly from Moodle API.
- * This is the cleanest way to get forum instance IDs.
- */
-export async function getForumsByCourseIds(
-  page: Page,
-  session: SessionInfo,
-  courseIds: number[]
-): Promise<Array<{ id: number; course: number; name: string }>> {
-  if (courseIds.length === 0) return [];
-
-  try {
-    const data = await moodleAjax<Array<{ id: number; course: number; name: string }>>(
-      page,
-      session,
-      "mod_forum_get_forums_by_courses",
-      {
-        courseids: courseIds,
-      }
-    );
-
-    return data ?? [];
-  } catch (e: any) {
-    // Re-throw with more context
-    throw new Error(`mod_forum_get_forums_by_courses failed: ${e?.message || e}`);
-  }
-}
-
-/**
- * Get discussions in a forum via AJAX.
- * Note: Requires forum instance ID, not cmid. Use getForumsByCourseIds() first.
- */
-export async function getForumDiscussions(
-  page: Page,
-  session: SessionInfo,
-  forumId: number
 ): Promise<ForumDiscussion[]> {
-  const data = await moodleAjax<{ discussions?: unknown[] }>(
-    page,
+  const params: Record<string, number> = { forumid: forumId, sortorder: options?.sortorder ?? 2 };
+  if (options?.page !== undefined) params.page = options.page;
+  if (options?.perpage !== undefined) params.perpage = options.perpage;
+  if (options?.groupid !== undefined) params.groupid = options.groupid;
+
+  const data = await moodleApiCall<{ discussions?: unknown[] }>(
     session,
     "mod_forum_get_forum_discussions",
-    {
-      forumid: forumId,
-    }
+    params
   );
 
   return (data?.discussions ?? []).map((d: any) => ({
-    id: d.id,
+    id: d.discussion,
     forumId: d.forum,
     name: d.name,
     firstPostId: d.firstpost,
     userId: d.userid,
+    userFullName: d.userfullname || "",
     groupId: d.groupid,
     timedue: d.timedue,
     timeModified: d.timemodified,
+    timeStart: d.timestart,
+    timeEnd: d.timeend,
     userModified: d.usermodified,
-    postCount: d.numdiscussion,
-    unread: d.unread,
+    userModifiedFullName: d.usermodifiedfullname,
+    postCount: d.numreplies,
+    unread: (d.numunread ?? 0) > 0,
+    subject: stripHtmlTags(d.subject ?? ""),
+    message: d.message,
+    pinned: d.pinned,
+    locked: d.locked,
+    starred: d.starred,
   }));
 }
 
 /**
- * Get posts in a discussion via AJAX.
+ * Get posts in a discussion via WS API (no browser required).
+ * Uses mod_forum_get_forum_discussion_posts
  */
-export async function getDiscussionPosts(
-  page: Page,
-  session: SessionInfo,
+export async function getDiscussionPostsApi(
+  session: { wsToken: string; moodleBaseUrl: string },
   discussionId: number
 ): Promise<ForumPost[]> {
   try {
-    const data = await moodleAjax<{ posts?: unknown[] }>(
-      page,
+    const data = await moodleApiCall<{ posts?: unknown[] }>(
       session,
-      "mod_forum_get_forum_discussion_posts",
+      "mod_forum_get_discussion_posts",
       {
         discussionid: discussionId,
       }
@@ -636,13 +418,13 @@ export async function getDiscussionPosts(
 
     return (data.posts as any[]).map((p: any) => ({
       id: p.id,
-      subject: p.subject || "",
-      author: p.author?.fullname ?? p.username ?? "Unknown",
-      authorId: p.userid,
-      created: p.created,
-      modified: p.modified,
-      message: p.message || "",
-      discussionId: p.discussion,
+      subject: stripHtmlTags(p.subject || ""),
+      author: p.author?.fullname ?? "Unknown",
+      authorId: p.author?.id ?? p.userid,
+      created: p.timecreated,
+      modified: p.timemodified,
+      message: stripHtmlTags(p.message || ""),
+      discussionId: p.discussionid,
       unread: p.unread ?? false,
     }));
   } catch (error) {
@@ -684,137 +466,7 @@ export async function getResourcesInCourse(
   }));
 }
 
-// ── Grade Operations ──────────────────────────────────────────────────────
-
-/**
- * Get course grades for the current user via AJAX.
- */
-export async function getCourseGrades(
-  page: Page,
-  session: SessionInfo,
-  courseId: number
-): Promise<CourseGrade> {
-  const data = await moodleAjax<{ usergrades?: unknown[] }>(
-    page,
-    session,
-    "gradereport_user_get_grade_items",
-    {
-      courseid: courseId,
-    }
-  );
-
-  const userGrades = data?.usergrades?.[0] as any;
-  if (!userGrades) {
-    return { courseId, courseName: "", items: [] };
-  }
-
-  return {
-    courseId,
-    courseName: userGrades.coursefullname ?? "",
-    grade: userGrades.grade,
-    gradeFormatted: userGrades.gradeformatted,
-    rank: userGrades.rank,
-    totalUsers: userGrades.totalusers,
-    items: (userGrades.gradeitems ?? []).map((item: any) => ({
-      id: item.id,
-      name: item.itemname || item.itemmodule,
-      grade: item.grade,
-      gradeFormatted: item.gradeformatted,
-      range: item.graderangeformatted,
-      percentage: item.percentage,
-      weight: item.weight,
-      feedback: item.feedback,
-      graded: !!item.graded,
-    })),
-  };
-}
-
-/**
- * Get course grades for the current user via pure WS API (no browser required).
- * Fast and lightweight - uses HTTP fetch directly.
- */
-export async function getCourseGradesApi(
-  session: { wsToken: string; moodleBaseUrl: string },
-  courseId: number
-): Promise<CourseGrade> {
-  const data = await moodleApiCall<{ usergrades?: unknown[] }>(
-    session,
-    "gradereport_user_get_grade_items",
-    {
-      courseid: courseId,
-    }
-  );
-
-  const userGrades = data?.usergrades?.[0] as any;
-  if (!userGrades) {
-    return { courseId, courseName: "", items: [] };
-  }
-
-  return {
-    courseId,
-    courseName: userGrades.coursefullname ?? "",
-    grade: userGrades.grade,
-    gradeFormatted: userGrades.gradeformatted,
-    rank: userGrades.rank,
-    totalUsers: userGrades.totalusers,
-    items: (userGrades.gradeitems ?? []).map((item: any) => ({
-      id: item.id,
-      name: item.itemname || item.itemmodule,
-      grade: item.grade,
-      gradeFormatted: item.gradeformatted,
-      range: item.graderangeformatted,
-      percentage: item.percentage,
-      weight: item.weight,
-      feedback: item.feedback,
-      graded: !!item.graded,
-    })),
-  };
-}
-
-// ── Calendar Operations ───────────────────────────────────────────────────
-
-/**
- * Get calendar events via AJAX.
- */
-export async function getCalendarEvents(
-  page: Page,
-  session: SessionInfo,
-  options: {
-    courseId?: number;
-    startTime?: number;
-    endTime?: number;
-    events?: { courseid?: number; groupid?: number; categoryid?: number }[];
-  } = {}
-): Promise<CalendarEvent[]> {
-  const data = await moodleAjax<{ events?: unknown[] }>(
-    page,
-    session,
-    "core_calendar_get_calendar_events",
-    {
-      ...options,
-    }
-  );
-
-  return (data?.events ?? []).map((e: any) => ({
-    id: e.id,
-    name: e.name,
-    description: e.description,
-    format: e.format,
-    courseid: e.courseid,
-    categoryid: e.categoryid,
-    groupid: e.groupid,
-    userid: e.userid,
-    moduleid: e.moduleid,
-    modulename: e.modulename,
-    instance: e.instance,
-    eventtype: e.eventtype,
-    timestart: e.timestart * 1000, // Convert to milliseconds
-    timeduration: e.timeduration ? e.timeduration * 1000 : undefined,
-    timedue: e.timedue ? e.timedue * 1000 : undefined,
-    visible: e.visible,
-    location: e.location,
-  }));
-}
+// ── Calendar Operations ─────────────────────────────────────────────────────
 
 /**
  * Get calendar events via pure WS API (no browser required).
@@ -856,6 +508,43 @@ export async function getCalendarEventsApi(
     visible: e.visible,
     location: e.location,
   }));
+}
+
+// ── Grade Operations ──────────────────────────────────────────────────────
+
+/**
+ * Get course grades for the current user via pure WS API (no browser required).
+ * Fast and lightweight - uses HTTP fetch directly.
+ */
+export async function getCourseGradesApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  courseId: number
+): Promise<CourseGrade> {
+  const data = await moodleApiCall<{ usergrades?: unknown[] }>(
+    session,
+    "gradereport_user_get_grade_items",
+    { courseid: courseId }
+  );
+
+  // The API returns grade items for the course
+  const gradeItems = (data?.usergrades ?? []) as any[];
+
+  // Return a single CourseGrade object with items array
+  return {
+    courseId,
+    courseName: gradeItems[0]?.coursefullname ?? "",
+    grade: gradeItems[0]?.grade,
+    gradeFormatted: gradeItems[0]?.gradeformatted,
+    rank: gradeItems[0]?.rank,
+    totalUsers: gradeItems[0]?.totalusers,
+    items: gradeItems.map((g: any) => ({
+      id: g.id,
+      name: g.itemname || g.itemtype,
+      grade: g.grade,
+      gradeFormatted: g.gradeformatted,
+      range: g.grade ? `${g.grademin ?? 0}-${g.grademax ?? 100}` : undefined,
+    })),
+  };
 }
 
 // ── Video Metadata (from original course.ts) ───────────────────────────────

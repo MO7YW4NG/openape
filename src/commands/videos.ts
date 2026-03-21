@@ -36,12 +36,15 @@ export function registerVideosCommand(program: Command): void {
 
     // Check if session exists
     if (!fs.existsSync(sessionPath)) {
+      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
+      log.info(`Session 預期位置: ${sessionPath}`);
       return null;
     }
 
     // Try to load WS token
     const wsToken = loadWsToken(sessionPath);
     if (!wsToken) {
+      log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
       return null;
     }
 
@@ -54,7 +57,7 @@ export function registerVideosCommand(program: Command): void {
     };
   }
 
-  // Helper function to create session context
+  // Helper function to create session context (for browser-only commands)
   async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
     log: Logger;
     page: import("playwright-core").Page;
@@ -62,9 +65,7 @@ export function registerVideosCommand(program: Command): void {
     browser: any;
     context: any;
   } | null> {
-    // Get global options if command is provided (for --verbose, --silent flags)
     const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    // Auto-enable silent mode for JSON output (unless --verbose is also set)
     const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
     const silent = outputFormat === "json" && !opts.verbose;
     const log = createLogger(opts.verbose, silent);
@@ -109,51 +110,25 @@ export function registerVideosCommand(program: Command): void {
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (courseId, options, command) => {
       const output: OutputFormat = getOutputFormat(command);
-
-      // Try pure API mode (no browser, fast!)
       const apiContext = await createApiContext(options, command);
-      if (apiContext) {
-        try {
-          const videos = await getSupervideosInCourseApi(apiContext.session, parseInt(courseId, 10));
-
-          // Filter by incomplete only if requested (API returns all, no completion status)
-          // Note: API doesn't provide completion status, so --incomplete-only won't work in API mode
-          if (options.incompleteOnly) {
-            apiContext.log.warn("--incomplete-only is not supported in API mode, showing all videos");
-          }
-
-          formatAndOutput(videos as unknown as Record<string, unknown>[], output, apiContext.log);
-          return;
-        } catch (e) {
-          // API failed, fall through to browser mode
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error(`// API mode failed: ${msg}, trying browser mode...`);
-        }
-      }
-
-      // Fallback to browser mode
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      const videos = await getSupervideosInCourseApi(apiContext.session, parseInt(courseId, 10));
 
-      try {
-        const videos = await getSupervideosInCourse(page, session, parseInt(courseId, 10), log, {
-          incompleteOnly: options.incompleteOnly,
-        });
-
-        formatAndOutput(videos as unknown as Record<string, unknown>[], output, log);
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
+      // Note: API doesn't provide completion status, so --incomplete-only shows all
+      if (options.incompleteOnly) {
+        apiContext.log.warn("--incomplete-only is not supported in API mode, showing all videos");
       }
+
+      formatAndOutput(videos as unknown as Record<string, unknown>[], output, apiContext.log);
     });
 
   videosCmd
     .command("complete")
-    .description("Complete videos in a course")
+    .description("Complete videos in a course (requires browser)")
     .argument("<course-id>", "Course ID")
     .option("--dry-run", "Discover videos but don't complete them")
     .option("--output <format>", "Output format: json|csv|table|silent")
@@ -220,7 +195,7 @@ export function registerVideosCommand(program: Command): void {
 
   videosCmd
     .command("complete-all")
-    .description("Complete all incomplete videos across all courses")
+    .description("Complete all incomplete videos across all courses (requires browser)")
     .option("--dry-run", "Discover videos but don't complete them")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
@@ -302,16 +277,15 @@ export function registerVideosCommand(program: Command): void {
 
   // Helper function to sanitize filename
   function sanitizeFilename(name: string): string {
-    // Remove/replace invalid characters
     return name
-      .replace(/[<>:"/\\|?*]/g, "_") // Replace invalid chars with underscore
-      .replace(/\s+/g, "_") // Replace spaces with underscores
-      .substring(0, 200); // Limit length
+      .replace(/[<>:"/\\|?*]/g, "_")
+      .replace(/\s+/g, "_")
+      .substring(0, 200);
   }
 
   videosCmd
     .command("download")
-    .description("Download videos from a course")
+    .description("Download videos from a course (requires browser)")
     .argument("<course-id>", "Course ID")
     .option("--output-dir <path>", "Output directory", "./downloads/videos")
     .option("--incomplete-only", "Download only incomplete videos")
@@ -331,7 +305,6 @@ export function registerVideosCommand(program: Command): void {
 
         log.info(`找到 ${videos.length} 個影片`);
 
-        // Create output directory
         const baseDir = getBaseDir();
         const outputDir = path.resolve(baseDir, options.outputDir);
         fs.mkdirSync(outputDir, { recursive: true });

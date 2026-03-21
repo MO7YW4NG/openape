@@ -20,9 +20,8 @@ export async function extractSessionInfo(
   }
 
   // Try extracting sesskey from M.cfg (Moodle's JS config object)
-  let sesskey = await page.evaluate(() => {
-    return (window as any).M?.cfg?.sesskey ?? null;
-  });
+  // Use string to avoid dnt transforming globalThis/window to dntShim
+  let sesskey: string | null = await page.evaluate("() => self.M?.cfg?.sesskey ?? null");
 
   // Fallback: extract from a hidden input
   if (!sesskey) {

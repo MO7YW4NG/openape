@@ -3,53 +3,98 @@ import type { AppConfig, Logger } from "./types.ts";
 import fs from "node:fs";
 import path from "node:path";
 
-/**
- * Get the WS token file path from the auth state path.
- * E.g., .auth/storage-state.json -> .auth/ws-token.json
- */
-export function getWsTokenPath(authStatePath: string): string {
-  const dir = path.dirname(authStatePath);
-  return path.join(dir, "ws-token.json");
+interface SessionMeta {
+  sesskey?: string;
+  sesskeyTimestamp?: number;
+  wsToken?: string;
+  wsTokenTimestamp?: number;
 }
 
 /**
- * Load WS token from file if it exists.
+ * Get the session metadata file path from the auth state path.
+ * E.g., .auth/storage-state.json -> .auth/session-meta.json
  */
-export function loadWsToken(authStatePath: string): string | null {
-  const tokenPath = getWsTokenPath(authStatePath);
+export function getSessionMetaPath(authStatePath: string): string {
+  const dir = path.dirname(authStatePath);
+  return path.join(dir, "session-meta.json");
+}
+
+/**
+ * Load session metadata from file.
+ */
+function loadSessionMeta(authStatePath: string): SessionMeta {
+  const metaPath = getSessionMetaPath(authStatePath);
   try {
-    if (fs.existsSync(tokenPath)) {
-      const content = fs.readFileSync(tokenPath, "utf8");
-      const data = JSON.parse(content);
-      // Check if token is not too old (Moodle tokens typically expire after some time)
-      if (data.token && data.timestamp) {
-        const age = Date.now() - data.timestamp;
-        // Consider token valid if less than 24 hours old
-        if (age < 24 * 60 * 60 * 1000) {
-          return data.token;
-        }
-      }
+    if (fs.existsSync(metaPath)) {
+      const content = fs.readFileSync(metaPath, "utf8");
+      return JSON.parse(content);
     }
   } catch {
-    // Ignore errors, token will be re-acquired
+    // Ignore errors, return empty meta
+  }
+  return {};
+}
+
+/**
+ * Save session metadata to file.
+ */
+function saveSessionMeta(authStatePath: string, meta: SessionMeta): void {
+  const metaPath = getSessionMetaPath(authStatePath);
+  try {
+    fs.writeFileSync(metaPath, JSON.stringify(meta, null, 2));
+  } catch {
+    // Ignore save errors
+  }
+}
+
+/**
+ * Load sesskey from metadata if it exists and is valid.
+ * Sesskey is typically valid for 6 hours.
+ */
+export function loadSesskey(authStatePath: string): string | null {
+  const meta = loadSessionMeta(authStatePath);
+  if (meta.sesskey && meta.sesskeyTimestamp) {
+    const age = Date.now() - meta.sesskeyTimestamp;
+    if (age < 6 * 60 * 60 * 1000) {
+      return meta.sesskey;
+    }
   }
   return null;
 }
 
 /**
- * Save WS token to file.
+ * Save sesskey to metadata.
+ */
+export function saveSesskey(authStatePath: string, sesskey: string): void {
+  const meta = loadSessionMeta(authStatePath);
+  meta.sesskey = sesskey;
+  meta.sesskeyTimestamp = Date.now();
+  saveSessionMeta(authStatePath, meta);
+}
+
+/**
+ * Load WS token from metadata if it exists and is valid.
+ * WS token is valid for 24 hours.
+ */
+export function loadWsToken(authStatePath: string): string | null {
+  const meta = loadSessionMeta(authStatePath);
+  if (meta.wsToken && meta.wsTokenTimestamp) {
+    const age = Date.now() - meta.wsTokenTimestamp;
+    if (age < 24 * 60 * 60 * 1000) {
+      return meta.wsToken;
+    }
+  }
+  return null;
+}
+
+/**
+ * Save WS token to metadata.
  */
 export function saveWsToken(authStatePath: string, token: string): void {
-  const tokenPath = getWsTokenPath(authStatePath);
-  try {
-    const data = {
-      token,
-      timestamp: Date.now(),
-    };
-    fs.writeFileSync(tokenPath, JSON.stringify(data, null, 2));
-  } catch {
-    // Ignore save errors
-  }
+  const meta = loadSessionMeta(authStatePath);
+  meta.wsToken = token;
+  meta.wsTokenTimestamp = Date.now();
+  saveSessionMeta(authStatePath, meta);
 }
 
 /**

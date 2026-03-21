@@ -1,10 +1,8 @@
-import { getBaseDir } from "../lib/utils.ts";
+import { getBaseDir, stripHtmlTags } from "../lib/utils.ts";
 import { Command } from "commander";
-import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCourses, getEnrolledCoursesApi } from "../lib/moodle.ts";
+import type { Logger, OutputFormat } from "../lib/types.ts";
+import { getEnrolledCoursesApi } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
-import { launchAuthenticated, closeBrowserSafely } from "../lib/auth.ts";
-import { extractSessionInfo } from "../lib/session.ts";
 import { loadWsToken } from "../lib/token.ts";
 import { formatAndOutput } from "../index.ts";
 import path from "node:path";
@@ -35,12 +33,15 @@ export function registerCoursesCommand(program: Command): void {
 
     // Check if session exists
     if (!fs.existsSync(sessionPath)) {
+      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
+      log.info(`Session 預期位置: ${sessionPath}`);
       return null;
     }
 
     // Try to load WS token
     const wsToken = loadWsToken(sessionPath);
     if (!wsToken) {
+      log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
       return null;
     }
 
@@ -53,57 +54,6 @@ export function registerCoursesCommand(program: Command): void {
     };
   }
 
-  // Helper function to create session context (browser mode - fallback)
-  async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
-    log: Logger;
-    page: import("playwright-core").Page;
-    session: SessionInfo;
-    browser: any;
-    context: any;
-  } | null> {
-    // Get global options if command is provided (for --verbose, --silent flags)
-    const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    // Auto-enable silent mode for JSON output (unless --verbose is also set)
-    const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
-    const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent);
-
-    // Determine session path
-    const baseDir = getBaseDir();
-    const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
-
-    // Check if session exists
-    if (!fs.existsSync(sessionPath)) {
-      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
-      log.info(`Session 預期位置: ${sessionPath}`);
-      return null;
-    }
-
-    // Create minimal config
-    const config = {
-      username: "",
-      password: "",
-      courseUrl: "",
-      moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-      headless: !options.headed,
-      slowMo: 0,
-      authStatePath: sessionPath,
-      ollamaBaseUrl: "",
-    };
-
-    log.info("啟動瀏覽器...");
-    const { browser, context, page } = await launchAuthenticated(config, log);
-
-    try {
-      const session = await extractSessionInfo(page, config, log);
-      return { log, page, session, browser, context };
-    } catch (err) {
-      await context.close();
-      await browser.close();
-      throw err;
-    }
-  }
-
   coursesCmd
     .command("list")
     .description("List enrolled courses")
@@ -112,57 +62,27 @@ export function registerCoursesCommand(program: Command): void {
     .option("--level <type>", "Course level: in_progress (default) | past | future | all", "in_progress")
     .action(async (options, command) => {
       const output: OutputFormat = getOutputFormat(command);
-
-      // Map level to classification
-      const classification = options.level === "all" ? undefined :
-                            options.level === "past" ? "past" :
-                            options.level === "future" ? "future" : "inprogress";
-
-      // Try API mode first (no browser, fast!)
       const apiContext = await createApiContext(options, command);
-      if (apiContext) {
-        try {
-          const courses = await getEnrolledCoursesApi(apiContext.session, {
-            classification,
-          });
-
-          let filteredCourses = courses;
-          if (options.incompleteOnly) {
-            filteredCourses = courses.filter(c => (c.progress ?? 0) < 100);
-          }
-
-          formatAndOutput(filteredCourses as unknown as Record<string, unknown>[], output, apiContext.log);
-          return;
-        } catch (e) {
-          // API failed, fall through to browser mode
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error(`// API mode failed: ${msg}, trying browser mode...`);
-        }
-      }
-
-      // Fallback to browser mode
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      // Map level to classification
+      const classification = options.level === "all" ? undefined :
+        options.level === "past" ? "past" :
+          options.level === "future" ? "future" : "inprogress";
 
-      try {
-        const courses = await getEnrolledCourses(page, session, log, {
-          classification,
-        });
+      const courses = await getEnrolledCoursesApi(apiContext.session, {
+        classification,
+      });
 
-        let filteredCourses = courses;
-        if (options.incompleteOnly) {
-          filteredCourses = courses.filter(c => (c.progress ?? 0) < 100);
-        }
-
-        formatAndOutput(filteredCourses as unknown as Record<string, unknown>[], output, log);
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
+      let filteredCourses = courses;
+      if (options.incompleteOnly) {
+        filteredCourses = courses.filter(c => (c.progress ?? 0) < 100);
       }
+
+      formatAndOutput(filteredCourses as unknown as Record<string, unknown>[], output, apiContext.log);
     });
 
   coursesCmd
@@ -172,52 +92,22 @@ export function registerCoursesCommand(program: Command): void {
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (courseId, options, command) => {
       const output: OutputFormat = getOutputFormat(command);
-
-      // Try pure API mode (no browser, fast!)
       const apiContext = await createApiContext(options, command);
-      if (apiContext) {
-        try {
-          const courses = await getEnrolledCoursesApi(apiContext.session);
-          const course = courses.find(c => c.id === parseInt(courseId, 10));
-
-          if (!course) {
-            apiContext.log.error(`Course not found: ${courseId}`);
-            process.exitCode = 1;
-            return;
-          }
-
-          formatAndOutput(course as unknown as Record<string, unknown>, output, apiContext.log);
-          return;
-        } catch (e) {
-          // API failed, fall through to browser mode
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error(`// API mode failed: ${msg}, trying browser mode...`);
-        }
-      }
-
-      // Fallback to browser mode
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      const courses = await getEnrolledCoursesApi(apiContext.session);
+      const course = courses.find(c => c.id === parseInt(courseId, 10));
 
-      try {
-        const courses = await getEnrolledCourses(page, session, log);
-        const course = courses.find(c => c.id === parseInt(courseId, 10));
-
-        if (!course) {
-          log.error(`Course not found: ${courseId}`);
-          process.exitCode = 1;
-          return;
-        }
-
-        formatAndOutput(course as unknown as Record<string, unknown>, output, log);
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
+      if (!course) {
+        apiContext.log.error(`Course not found: ${courseId}`);
+        process.exitCode = 1;
+        return;
       }
+
+      formatAndOutput(course as unknown as Record<string, unknown>, output, apiContext.log);
     });
 
   coursesCmd
@@ -227,68 +117,30 @@ export function registerCoursesCommand(program: Command): void {
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (courseId, options, command) => {
       const output: OutputFormat = getOutputFormat(command);
-
-      // Try pure API mode (no browser, fast!)
       const apiContext = await createApiContext(options, command);
-      if (apiContext) {
-        try {
-          const courses = await getEnrolledCoursesApi(apiContext.session);
-          const course = courses.find(c => c.id === parseInt(courseId, 10));
-
-          if (!course) {
-            apiContext.log.error(`Course not found: ${courseId}`);
-            process.exitCode = 1;
-            return;
-          }
-
-          const progressData = {
-            courseId: course.id,
-            courseName: course.fullname,
-            progress: course.progress ?? 0,
-            startDate: course.startdate ? new Date(course.startdate * 1000).toISOString() : null,
-            endDate: course.enddate ? new Date(course.enddate * 1000).toISOString() : null,
-          };
-
-          formatAndOutput(progressData as unknown as Record<string, unknown>, output, apiContext.log);
-          return;
-        } catch (e) {
-          // API failed, fall through to browser mode
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error(`// API mode failed: ${msg}, trying browser mode...`);
-        }
-      }
-
-      // Fallback to browser mode
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      const courses = await getEnrolledCoursesApi(apiContext.session);
+      const course = courses.find(c => c.id === parseInt(courseId, 10));
 
-      try {
-        const courses = await getEnrolledCourses(page, session, log);
-        const course = courses.find(c => c.id === parseInt(courseId, 10));
-
-        if (!course) {
-          log.error(`Course not found: ${courseId}`);
-          process.exitCode = 1;
-          return;
-        }
-
-        const progressData = {
-          courseId: course.id,
-          courseName: course.fullname,
-          progress: course.progress ?? 0,
-          startDate: course.startdate ? new Date(course.startdate * 1000).toISOString() : null,
-          endDate: course.enddate ? new Date(course.enddate * 1000).toISOString() : null,
-        };
-
-        formatAndOutput(progressData as unknown as Record<string, unknown>, output, log);
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
+      if (!course) {
+        apiContext.log.error(`Course not found: ${courseId}`);
+        process.exitCode = 1;
+        return;
       }
+
+      const progressData = {
+        courseId: course.id,
+        courseName: course.fullname,
+        progress: course.progress ?? 0,
+        startDate: course.startdate ? new Date(course.startdate * 1000).toISOString() : null,
+        endDate: course.enddate ? new Date(course.enddate * 1000).toISOString() : null,
+      };
+
+      formatAndOutput(progressData as unknown as Record<string, unknown>, output, apiContext.log);
     });
 
   // Helper function to fetch syllabus from CMAP using GWT-RPC API
@@ -506,11 +358,8 @@ export function registerCoursesCommand(program: Command): void {
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (courseId, options, command) => {
       const output: OutputFormat = getOutputFormat(command);
-
-      // First get course info to get shortname
       const apiContext = await createApiContext(options, command);
       if (!apiContext) {
-        console.error("// Unable to get course info without session");
         process.exitCode = 1;
         return;
       }

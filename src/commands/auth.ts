@@ -5,6 +5,7 @@ import type { Logger } from "../lib/types.ts";
 import { createLogger } from "../lib/logger.ts";
 
 import { findEdgePath } from "../lib/auth.ts";
+import { saveSesskey, acquireWsToken, saveWsToken } from "../lib/token.ts";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -127,6 +128,39 @@ export function registerAuthCommand(program: Command): void {
 
         if (loggedIn) {
           await context.storageState({ path: sessionPath });
+
+          // Extract and save sesskey for faster API calls
+          try {
+            // Navigate to a page with M.cfg first
+            await page.goto("https://ilearning.cycu.edu.tw/my/", { waitUntil: "domcontentloaded" });
+            // Use Function constructor to avoid dnt transforming globalThis
+            const sesskey = await page.evaluate(() => (self as any).M?.cfg?.sesskey ?? null);
+            if (sesskey) {
+              saveSesskey(sessionPath, sesskey);
+              log.debug(`Saved sesskey: ${sesskey}`);
+            }
+          } catch {
+            // Ignore sesskey extraction errors
+          }
+
+          // Try to acquire WS token
+          try {
+            const config = {
+              username: "",
+              password: "",
+              courseUrl: "",
+              moodleBaseUrl: "https://ilearning.cycu.edu.tw",
+              headless: false,
+              slowMo: 0,
+              authStatePath: sessionPath,
+              ollamaBaseUrl: "",
+            };
+            const wsToken = await acquireWsToken(page, config, log);
+            saveWsToken(sessionPath, wsToken);
+          } catch {
+            // WS token is optional, ignore errors
+          }
+
           const stats = fs.statSync(sessionPath);
           const result = {
             status: "success",

@@ -1,12 +1,11 @@
 import { getBaseDir } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCourses, getEnrolledCoursesApi, getResourcesInCourse, getResourcesByCoursesApi } from "../lib/moodle.ts";
+import { getEnrolledCourses, getEnrolledCoursesApi, getResourcesByCoursesApi } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
 import { launchAuthenticated } from "../lib/auth.ts";
 import { extractSessionInfo } from "../lib/session.ts";
 import { closeBrowserSafely } from "../lib/auth.ts";
-import { formatAndOutput } from "../index.ts";
 import { loadWsToken } from "../lib/token.ts";
 import path from "node:path";
 import fs from "node:fs";
@@ -56,12 +55,15 @@ export function registerMaterialsCommand(program: Command): void {
 
     // Check if session exists
     if (!fs.existsSync(sessionPath)) {
+      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
+      log.info(`Session 預期位置: ${sessionPath}`);
       return null;
     }
 
     // Try to load WS token
     const wsToken = loadWsToken(sessionPath);
     if (!wsToken) {
+      log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
       return null;
     }
 
@@ -74,7 +76,7 @@ export function registerMaterialsCommand(program: Command): void {
     };
   }
 
-  // Helper function to create session context
+  // Helper function to create session context (for download commands)
   async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
     log: Logger;
     page: import("playwright-core").Page;
@@ -82,25 +84,19 @@ export function registerMaterialsCommand(program: Command): void {
     browser: any;
     context: any;
   } | null> {
-    // Get global options if command is provided (for --verbose, --silent flags)
     const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    // Auto-enable silent mode for JSON output (unless --verbose is also set)
     const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
     const silent = outputFormat === "json" && !opts.verbose;
     const log = createLogger(opts.verbose, silent);
 
-    // Determine session path
     const baseDir = getBaseDir();
     const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
 
-    // Check if session exists
     if (!fs.existsSync(sessionPath)) {
       log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
-      log.info(`Session 預期位置: ${sessionPath}`);
       return null;
     }
 
-    // Create minimal config
     const config = {
       username: "",
       password: "",
@@ -127,7 +123,6 @@ export function registerMaterialsCommand(program: Command): void {
 
   // Helper to sanitize filenames
   function sanitizeFilename(name: string): string {
-    // Remove or replace invalid characters
     return name.replace(/[<>:"/\\|?*]/g, "_").replace(/\s+/g, "_");
   }
 
@@ -224,141 +219,74 @@ export function registerMaterialsCommand(program: Command): void {
     .option("--level <type>", "Course level: in_progress (default) | all", "in_progress")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
-      // Try pure API mode (no browser, fast!)
       const apiContext = await createApiContext(options, command);
-      if (apiContext) {
-        try {
-          const classification = options.level === "all" ? undefined : "inprogress";
-          const courses = await getEnrolledCoursesApi(apiContext.session, {
-            classification,
-          });
-
-          // Get materials via WS API (no browser needed!)
-          const courseIds = courses.map(c => c.id);
-          const apiResources = await getResourcesByCoursesApi(apiContext.session, courseIds);
-
-          // Build a map of courseId -> course for quick lookup
-          const courseMap = new Map(courses.map(c => [c.id, c]));
-
-          const allMaterials: MaterialWithCourse[] = [];
-          for (const resource of apiResources) {
-            const course = courseMap.get(resource.courseId);
-            if (course) {
-              allMaterials.push({
-                course_id: resource.courseId,
-                course_name: course.fullname,
-                cmid: resource.cmid,
-                name: resource.name,
-                url: resource.url,
-                modType: resource.modType,
-                mimetype: resource.mimetype,
-                filesize: resource.filesize,
-                modified: resource.modified,
-              });
-            }
-          }
-
-          const output = {
-            status: "success",
-            timestamp: new Date().toISOString(),
-            level: options.level,
-            materials: allMaterials.map(m => ({
-              course_id: m.course_id,
-              course_name: m.course_name,
-              id: m.cmid,
-              name: m.name,
-              type: m.modType,
-              mimetype: m.mimetype,
-              filesize: m.filesize,
-              modified: m.modified ? new Date(m.modified * 1000).toISOString() : null,
-              url: m.url,
-            })),
-            summary: {
-              total_courses: courses.length,
-              total_materials: allMaterials.length,
-              by_type: allMaterials.reduce((acc, m) => {
-                acc[m.modType] = (acc[m.modType] || 0) + 1;
-                return acc;
-              }, {} as Record<string, number>),
-            },
-          };
-          console.log(JSON.stringify(output));
-          return;
-        } catch (e) {
-          // API failed, fall through to browser mode
-          const msg = e instanceof Error ? e.message : String(e);
-          console.error(`// API mode failed: ${msg}, trying browser mode...`);
-        }
-      }
-
-      // Fallback to browser mode
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      const classification = options.level === "all" ? undefined : "inprogress";
+      const courses = await getEnrolledCoursesApi(apiContext.session, {
+        classification,
+      });
 
-      try {
-        // Map level to classification
-        const classification = options.level === "all" ? undefined : "inprogress";
-        const courses = await getEnrolledCourses(page, session, log, { classification });
+      // Get materials via WS API (no browser needed!)
+      const courseIds = courses.map(c => c.id);
+      const apiResources = await getResourcesByCoursesApi(apiContext.session, courseIds);
 
-        const allMaterials: MaterialWithCourse[] = [];
-        for (const course of courses) {
-          const resources = await getResourcesInCourse(page, session, course.id, log);
-          for (const resource of resources) {
-            allMaterials.push({
-              course_id: course.id,
-              course_name: course.fullname,
-              cmid: resource.cmid,
-              name: resource.name,
-              url: resource.url,
-              modType: resource.modType,
-              mimetype: resource.mimetype,
-              filesize: resource.filesize,
-              modified: resource.modified,
-            });
-          }
+      // Build a map of courseId -> course for quick lookup
+      const courseMap = new Map(courses.map(c => [c.id, c]));
+
+      const allMaterials: MaterialWithCourse[] = [];
+      for (const resource of apiResources) {
+        const course = courseMap.get(resource.courseId);
+        if (course) {
+          allMaterials.push({
+            course_id: resource.courseId,
+            course_name: course.fullname,
+            cmid: resource.cmid,
+            name: resource.name,
+            url: resource.url,
+            modType: resource.modType,
+            mimetype: resource.mimetype,
+            filesize: resource.filesize,
+            modified: resource.modified,
+          });
         }
-
-        const output = {
-          status: "success",
-          timestamp: new Date().toISOString(),
-          level: options.level,
-          materials: allMaterials.map(m => ({
-            course_id: m.course_id,
-            course_name: m.course_name,
-            id: m.cmid,
-            name: m.name,
-            type: m.modType,
-            mimetype: m.mimetype,
-            filesize: m.filesize,
-            modified: m.modified ? new Date(m.modified * 1000).toISOString() : null,
-            url: m.url,
-          })),
-          summary: {
-            total_courses: courses.length,
-            total_materials: allMaterials.length,
-            by_type: allMaterials.reduce((acc, m) => {
-              acc[m.modType] = (acc[m.modType] || 0) + 1;
-              return acc;
-            }, {} as Record<string, number>),
-          },
-        };
-        console.log(JSON.stringify(output));
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
       }
+
+      const output = {
+        status: "success",
+        timestamp: new Date().toISOString(),
+        level: options.level,
+        materials: allMaterials.map(m => ({
+          course_id: m.course_id,
+          course_name: m.course_name,
+          id: m.cmid,
+          name: m.name,
+          type: m.modType,
+          mimetype: m.mimetype,
+          filesize: m.filesize,
+          modified: m.modified ? new Date(m.modified * 1000).toISOString() : null,
+          url: m.url,
+        })),
+        summary: {
+          total_courses: courses.length,
+          total_materials: allMaterials.length,
+          by_type: allMaterials.reduce((acc, m) => {
+            acc[m.modType] = (acc[m.modType] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>),
+        },
+      };
+      console.log(JSON.stringify(output));
     });
 
   materialsCmd
     .command("download")
-    .description("Download all materials from a specific course")
+    .description("Download all materials from a specific course (requires browser)")
     .argument("<course-id>", "Course ID")
     .option("--output-dir <path>", "Output directory", "./downloads")
-    .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (courseId, options, command) => {
       const context = await createSessionContext(options, command);
       if (!context) {
@@ -378,18 +306,31 @@ export function registerMaterialsCommand(program: Command): void {
           return;
         }
 
-        const resources = await getResourcesInCourse(page, session, course.id, log);
-        const materials: MaterialWithCourse[] = resources.map(r => ({
-          course_id: course.id,
-          course_name: course.fullname,
-          cmid: r.cmid,
-          name: r.name,
-          url: r.url,
-          modType: r.modType,
-          mimetype: r.mimetype,
-          filesize: r.filesize,
-          modified: r.modified,
-        }));
+        // Navigate to course page to find materials
+        await page.goto(`https://ilearning.cycu.edu.tw/course/view.php?id=${course.id}`, { waitUntil: "domcontentloaded" });
+
+        // Find all resource links
+        const materials: MaterialWithCourse[] = [];
+        const resourceLinks = await page.$$eval('a[href*="/mod/resource/view.php"]', (links) => {
+          return links.map((a) => ({
+            url: (a as HTMLAnchorElement).href,
+            name: a.textContent?.trim() || "",
+          }));
+        });
+
+        for (const link of resourceLinks) {
+          const cmidMatch = link.url.match(/id=(\d+)/);
+          if (cmidMatch) {
+            materials.push({
+              course_id: course.id,
+              course_name: course.fullname,
+              cmid: cmidMatch[1],
+              name: link.name,
+              url: link.url,
+              modType: "resource",
+            });
+          }
+        }
 
         log.info(`Found ${materials.length} materials in course: ${course.fullname}`);
 
@@ -428,10 +369,9 @@ export function registerMaterialsCommand(program: Command): void {
 
   materialsCmd
     .command("download-all")
-    .description("Download all materials from all courses")
+    .description("Download all materials from all courses (requires browser)")
     .option("--output-dir <path>", "Output directory", "./downloads")
     .option("--level <type>", "Course level: in_progress (default) | all", "in_progress")
-    .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
       const context = await createSessionContext(options, command);
       if (!context) {
@@ -442,7 +382,6 @@ export function registerMaterialsCommand(program: Command): void {
       const { log, page, session, browser, context: browserContext } = context;
 
       try {
-        // Map level to classification
         const classification = options.level === "all" ? undefined : "inprogress";
         const courses = await getEnrolledCourses(page, session, log, { classification });
 
@@ -450,19 +389,27 @@ export function registerMaterialsCommand(program: Command): void {
 
         const allMaterials: MaterialWithCourse[] = [];
         for (const course of courses) {
-          const resources = await getResourcesInCourse(page, session, course.id, log);
-          for (const resource of resources) {
-            allMaterials.push({
-              course_id: course.id,
-              course_name: course.fullname,
-              cmid: resource.cmid,
-              name: resource.name,
-              url: resource.url,
-              modType: resource.modType,
-              mimetype: resource.mimetype,
-              filesize: resource.filesize,
-              modified: resource.modified,
-            });
+          await page.goto(`https://ilearning.cycu.edu.tw/course/view.php?id=${course.id}`, { waitUntil: "domcontentloaded" });
+
+          const resourceLinks = await page.$$eval('a[href*="/mod/resource/view.php"]', (links) => {
+            return links.map((a) => ({
+              url: (a as HTMLAnchorElement).href,
+              name: a.textContent?.trim() || "",
+            }));
+          });
+
+          for (const link of resourceLinks) {
+            const cmidMatch = link.url.match(/id=(\d+)/);
+            if (cmidMatch) {
+              allMaterials.push({
+                course_id: course.id,
+                course_name: course.fullname,
+                cmid: cmidMatch[1],
+                name: link.name,
+                url: link.url,
+                modType: "resource",
+              });
+            }
           }
         }
 

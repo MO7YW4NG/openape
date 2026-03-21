@@ -94,12 +94,21 @@ export interface ForumDiscussion {
   name: string;
   firstPostId: number;
   userId: number;
+  userFullName: string;
   groupId?: number;
   timedue?: number;
   timeModified: number;
+  timeStart?: number;
+  timeEnd?: number;
   userModified?: number;
-  postCount?: number;
-  unread?: boolean;
+  userModifiedFullName?: string;
+  postCount?: number; // numreplies
+  unread?: boolean; // numunread > 0
+  subject?: string;
+  message?: string;
+  pinned?: boolean;
+  locked?: boolean;
+  starred?: boolean;
 }
 
 // ── Announcement Types ────────────────────────────────────────────────

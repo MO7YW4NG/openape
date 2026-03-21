@@ -1,4 +1,3 @@
-#!/usr/bin/env -S deno run --allow-all
 import { getBaseDir } from "./lib/utils.ts";
 
 import { Command } from "commander";
