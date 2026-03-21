@@ -1,4 +1,7 @@
-# OpenApe CLI (Unofficial)
+<h1 align="center">
+  <img src="assets/logo.svg" width="150" /><br/>
+  OpenApe CLI (Unofficial)
+</h1>
 
 中原大學 [i-Learning](https://ilearning.cycu.edu.tw/) (Moodle) 平台自動化命令列工具 (CLI)，幫助你快速查詢課程、觀看影片、下載教材。
 
