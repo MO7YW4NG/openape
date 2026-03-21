@@ -31,7 +31,7 @@ await build({
     },
     repository: {
       type: "git",
-      url: "git+https://github.com/mo7yw4ng/openape.git",
+      url: "https://github.com/MO7YW4NG/openape",
     },
     bugs: {
       url: "https://github.com/mo7yw4ng/openape/issues",
