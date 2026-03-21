@@ -46,6 +46,17 @@ await build({
     Deno.copyFileSync("LICENSE", "build/LICENSE");
     Deno.copyFileSync("README.md", "build/README.md");
 
+    // Fix: Add missing npm dependencies that dnt doesn't auto-detect
+    const packageJsonPath = "./build/package.json";
+    const packageJson = JSON.parse(Deno.readTextFileSync(packageJsonPath));
+    packageJson.dependencies = {
+      ...packageJson.dependencies,
+      "commander": "^12.1.0",
+      "playwright-core": "^1.48.0",
+      "node-html-parser": "^6.1.13",
+    };
+    Deno.writeTextFileSync(packageJsonPath, JSON.stringify(packageJson, null, 2));
+
     // Bundle the skills directory so `openape skills install` works after npm install
     const skillsSrc = "./skills";
     const skillsDest = "./build/skills";
