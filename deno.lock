@@ -156,13 +156,6 @@
       "npm:commander@^12.1.0",
       "npm:node-html-parser@^6.1.13",
       "npm:playwright-core@^1.48.0"
-    ],
-    "packageJson": {
-      "dependencies": [
-        "npm:commander@^12.1.0",
-        "npm:node-html-parser@^6.1.13",
-        "npm:playwright-core@^1.48.0"
-      ]
-    }
+    ]
   }
 }
