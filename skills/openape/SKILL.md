@@ -11,14 +11,17 @@ Use the `openape` command to access CYCU iLearning (Moodle) platform. OpenApe pr
 
 Install via npm:
 ```bash
-npm install -g openape
+npm install -g @mo7yw4ng/openape
 ```
 
-Or clone and compile:
+Or run without installing:
 ```bash
-git clone https://github.com/mo7yw4ng/openape && cd openape
-deno task compile
-# Add dist/OpenApe.exe to your PATH
+npx @mo7yw4ng/openape --help
+```
+
+Or install via Deno/JSR:
+```bash
+deno install -A -g -n openape jsr:@openape/openape
 ```
 
 If not authenticated, run:

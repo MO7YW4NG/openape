@@ -33,11 +33,11 @@ jobs:
         run: deno task build:npm
 
       - name: Verify CLI works in Node.js
-        run: node build/esm/src/index.js --help
+        run: node build/script/src/index.js --help
 
       - name: Publish to npm
         working-directory: ./build
-        run: npm publish --provenance --access public
+        run: npm publish --provenance --access=public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

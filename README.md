@@ -12,9 +12,19 @@
 
 ## 安裝
 
-透過 npm 安裝（[Node.js v18+](https://nodejs.org/)）：
+透過 npm 安裝為全域指令（推薦，[Node.js](https://nodejs.org/) v18+）：
 ```bash
-npm install -g openape
+npm install -g @mo7yw4ng/openape
+```
+
+或用 npx 單次執行（不需安裝）：
+```bash
+npx @mo7yw4ng/openape --help
+```
+
+或透過 Deno/JSR 安裝：
+```bash
+deno install -A -g -n openape jsr:@openape/openape
 ```
 
 ## 核心指令
@@ -32,7 +42,7 @@ openape auth logout    # 登出並清除 session
 openape courses list               # 列出所有課程 (支援 --incomplete-only, --level)
 openape courses info <id>          # 顯示特定課程的詳細資訊
 openape courses progress <id>      # 顯示特定課程的進度
-openape courses syllabus <id>      # 顯示課程大綱
+openape courses syllabus <id>      # 顯示課程大綱 (從 CMAP 取得)
 ```
 
 ### 影片 (Videos)

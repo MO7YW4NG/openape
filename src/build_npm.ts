@@ -22,10 +22,13 @@ await build({
   },
   test: false,
   package: {
-    name: "openape",
+    name: "@mo7yw4ng/openape",
     version: denoJson.version,
     description: denoJson.description,
     license: "MIT",
+    bin: {
+      openape: "./script/src/index.js"
+    },
     repository: {
       type: "git",
       url: "git+https://github.com/mo7yw4ng/openape.git",
