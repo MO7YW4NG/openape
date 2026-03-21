@@ -36,6 +36,7 @@ jobs:
         run: node build/esm/src/index.js --help
 
       - name: Publish to npm
+        working-directory: ./build
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
