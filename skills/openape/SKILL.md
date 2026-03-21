@@ -14,11 +14,6 @@ Install via npm:
 npm install -g @mo7yw4ng/openape
 ```
 
-Or run without installing:
-```bash
-npx @mo7yw4ng/openape --help
-```
-
 Or install via Deno/JSR:
 ```bash
 deno install -A -g -n openape jsr:@openape/openape
@@ -305,6 +300,7 @@ openape courses syllabus <course-id>
 **Review discussions:** Catch up on forum activity.
 ```bash
 openape forums list --level in_progress
+openape forums list-all
 openape forums discussions <forum-id>
 openape forums posts <discussion-id>
 ```

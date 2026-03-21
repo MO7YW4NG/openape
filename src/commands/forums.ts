@@ -13,6 +13,7 @@ interface ForumWithCourse {
   cmid: string;
   forum_id: number;
   name: string;
+  timemodified: number;
   // url: string;
 }
 
@@ -94,6 +95,7 @@ export function registerForumsCommand(program: Command): void {
             cmid: wsForum.cmid.toString(),
             forum_id: wsForum.id,
             name: wsForum.name,
+            timemodified: wsForum.timemodified,
             // url: `https://ilearning.cycu.edu.tw/mod/forum/view.php?id=${wsForum.cmid}`,
           });
         }
@@ -143,7 +145,7 @@ export function registerForumsCommand(program: Command): void {
             cmid: wsForum.cmid.toString(),
             forum_id: wsForum.id,
             name: wsForum.name,
-            url: `https://ilearning.cycu.edu.tw/mod/forum/view.php?id=${wsForum.cmid}`,
+            timemodified: wsForum.timemodified,
           });
         }
       }
@@ -166,7 +168,6 @@ export function registerForumsCommand(program: Command): void {
     .description("List discussions in a forum (use forum ID)")
     .argument("<forum-id>", "Forum ID")
     .option("--output <format>", "Output format: json|csv|table|silent")
-    .option("--msg", "Include message content in response")
     .action(async (forumId, options, command) => {
       const apiContext = await createApiContext(options, command);
       if (!apiContext) {
@@ -206,28 +207,15 @@ export function registerForumsCommand(program: Command): void {
         forum_name: targetForum.name,
         course_id: course?.id,
         course_name: course?.fullname,
-        discussions: discussions.map(d => {
-          const discussion: {
-            id: number;
-            name: string;
-            user_id: number;
-            time_modified: number | undefined;
-            post_count: number | undefined;
-            unread: boolean | undefined;
-            message?: string;
-          } = {
-            id: d.id,
-            name: d.name,
-            user_id: d.userId,
-            time_modified: d.timeModified,
-            post_count: d.postCount,
-            unread: d.unread,
-          };
-          if (options.msg) {
-            discussion.message = stripHtmlTags(d.message || "");
-          }
-          return discussion;
-        }),
+        discussions: discussions.map(d => ({
+          id: d.id,
+          name: d.name,
+          user_id: d.userId,
+          time_modified: d.timeModified,
+          post_count: d.postCount,
+          unread: d.unread,
+          message: (stripHtmlTags(d.message || "")).substring(0, 250) + "...",
+        })),
         summary: {
           total_discussions: discussions.length,
         },

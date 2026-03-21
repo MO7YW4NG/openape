@@ -331,7 +331,7 @@ export async function getSupervideosInCourse(
 export async function getForumsApi(
   session: { wsToken: string; moodleBaseUrl: string },
   courseIds: number[]
-): Promise<Array<{ id: number; cmid: number; name: string; courseid: number }>> {
+): Promise<Array<{ id: number; cmid: number; name: string; courseid: number; timemodified: number }>> {
   const data = await moodleApiCall<any[]>(
     session,
     "mod_forum_get_forums_by_courses",
@@ -343,6 +343,7 @@ export async function getForumsApi(
     cmid: f.cmid,
     name: f.name,
     courseid: f.course,  // API returns 'course' not 'courseid'
+    timemodified: f.timemodified,
   }));
 }
 
