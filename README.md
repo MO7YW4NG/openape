@@ -9,8 +9,9 @@
 - 📚 **課程資訊**：列出修課清單、成績、課程大綱與進度。
 - 📺 **影片輔助**：列出/下載影片，甚至自動標記為已觀看。
 - 📝 **測驗與教材**：快速查看測驗、下載教材。
-- 💬 **討論區與公告**：閱讀公告與討論區。
+- 💬 **討論區與公告**：閱讀公告、討論區、發表回覆。
 - 📅 **行事曆**：內建行事曆事件查詢與匯出。
+- ✅ **作業繳交**：查詢作業、檢查繳交狀態、上傳檔案並繳交。
 - 🤖 **Agent Skills**：提供 Claude Code 等 Skills 工作流支援。
 
 ## 安裝
@@ -70,11 +71,31 @@ openape materials download-all       # 批次下載教材
 ```bash
 openape grades summary               # 顯示學期成績總覽
 openape grades course <id>           # 顯示特定課程成績
-openape forums list <course-id>      # 列出課程論壇
+openape forums list                  # 列出進行中課程的討論區
+openape forums list-all              # 列出所有討論區
+openape forums discussions <forum-id>      # 列出討論區中的討論串
+openape forums posts <discussion-id>       # 列出討論串中的貼文
+openape forums reply <post-id> <subject> <message>  # 回覆貼文
+openape forums post <forum-id> <subject> <message>  # 發起新討論
 openape announcements list-all       # 列出所有公告
 openape announcements read <id>      # 閱讀特定公告
 openape calendar events              # 查詢行事曆事件
 openape calendar export              # 匯出事件
+```
+
+### 作業與檔案上傳 (Assignments & Upload)
+```bash
+# 作業查詢與繳交
+openape assignments list <course-id>       # 列出課程作業
+openape assignments list-all               # 列出所有作業 (支援 --level all)
+openape assignments status <assignment-id> # 檢查作業繳交狀態
+openape assignments submit <assignment-id> # 繳交作業
+  --text "內容"                            # 線上文字繳交
+  --file-id <draft-id>                     # 使用已上傳的檔案 ID
+  --file <path>                            # 直接上傳檔案並繳交
+
+# 檔案上傳至草稿區
+openape upload file <path>                 # 上傳檔案取得 draft ID
 ```
 
 ### Skills

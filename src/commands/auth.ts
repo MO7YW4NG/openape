@@ -5,7 +5,8 @@ import type { Logger } from "../lib/types.ts";
 import { createLogger } from "../lib/logger.ts";
 
 import { findEdgePath } from "../lib/auth.ts";
-import { saveSesskey, acquireWsToken, saveWsToken } from "../lib/token.ts";
+import { saveSesskey, acquireWsToken, saveWsToken, loadWsToken } from "../lib/token.ts";
+import { getSiteInfoApi } from "../lib/moodle.ts";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -210,7 +211,7 @@ export function registerCommand(program: Command): void {
           const cookies = state.cookies || [];
           const moodleSession = cookies.find((c: any) => c.name === "MoodleSession");
 
-          const result = {
+          const result: Record<string, any> = {
             status: "success",
             session_path: sessionPath,
             exists: true,
@@ -223,6 +224,25 @@ export function registerCommand(program: Command): void {
               exists: false
             }
           };
+
+          // Try to get user info from WS API
+          try {
+            const wsToken = loadWsToken(sessionPath);
+            if (wsToken) {
+              const session = {
+                wsToken,
+                moodleBaseUrl: "https://ilearning.cycu.edu.tw"
+              };
+              const siteInfo = await getSiteInfoApi(session);
+              result.user = {
+                userid: siteInfo.userid,
+                username: siteInfo.username,
+                fullname: siteInfo.fullname
+              };
+            }
+          } catch {
+            // WS token might not be available or expired, skip user info
+          }
 
           console.log(JSON.stringify(result, null, 2));
         } catch {

@@ -1,5 +1,6 @@
 import type { Page } from "playwright-core";
 import { stripHtmlTags, extractCourseName } from "./utils.ts";
+import * as fs from "node:fs";
 import type {
   SessionInfo,
   Logger,
@@ -23,6 +24,11 @@ const WS_API_FUNCTIONS = new Set([
   "mod_forum_get_forums_by_courses",
   "mod_forum_get_forum_discussions",
   "mod_forum_get_forum_discussion_posts",
+  "mod_forum_add_discussion",
+  "mod_forum_add_discussion_post",
+  "core_files_upload",
+  "core_files_get_files",
+  "core_files_get_unused_draft_itemid",
   "gradereport_user_get_grade_items",
   "core_calendar_get_calendar_events",
   "core_course_get_contents",
@@ -34,6 +40,9 @@ const WS_API_FUNCTIONS = new Set([
   "mod_supervideo_view_supervideo",
   "mod_quiz_get_quizzes_by_courses",
   "mod_resource_get_resources_by_courses",
+  "mod_assign_get_assignments",
+  "mod_assign_save_submission",
+  "mod_assign_get_submission_status",
   "core_message_get_messages",
   "core_webservice_get_site_info",
 ]);
@@ -41,12 +50,21 @@ const WS_API_FUNCTIONS = new Set([
 /**
  * Convert args to URLSearchParams, handling arrays properly for Moodle WS API.
  * Moodle expects array parameters as: courseids[0]=1&courseids[1]=2
+ * For options array: options[0][name]=attachmentsid&options[0][value]=123
  */
 function buildWsParams(args: Record<string, unknown>): URLSearchParams {
   const params = new URLSearchParams();
 
   for (const [key, value] of Object.entries(args)) {
-    if (Array.isArray(value)) {
+    if (key === "options" && Array.isArray(value)) {
+      // Special handling for options array: options[0][name]=xxx&options[0][value]=yyy
+      value.forEach((opt: any, i) => {
+        if (opt && typeof opt === "object" && "name" in opt && "value" in opt) {
+          params.append(`${key}[${i}][name]`, String(opt.name));
+          params.append(`${key}[${i}][value]`, String(opt.value));
+        }
+      });
+    } else if (Array.isArray(value)) {
       // Array parameters: courseids[0]=1&courseids[1]=2
       value.forEach((v, i) => {
         params.append(`${key}[${i}]`, String(v));
@@ -69,7 +87,7 @@ export async function moodleApiCall<T = unknown>(
   args: Record<string, unknown>
 ): Promise<T> {
   if (!session.wsToken) {
-    throw new Error(`WS Token required for API call: ${methodname}`);
+    throw new Error(`WS ${methodname} required for API call: ${methodname}`);
   }
 
   const params = buildWsParams(args);
@@ -424,6 +442,110 @@ export async function getDiscussionPostsApi(
     // Return empty array on error instead of throwing
     // This allows commands to gracefully handle inaccessible discussions
     return [];
+  }
+}
+
+/**
+ * Add a new discussion to a forum via WS API.
+ * Uses mod_forum_add_discussion
+ */
+export async function addForumDiscussionApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  forumId: number,
+  subject: string,
+  message: string,
+  options?: { subscribe?: boolean; pin?: boolean }
+): Promise<{ success: boolean; discussionId?: number; error?: string }> {
+  try {
+    const data = await moodleApiCall<any>(
+      session,
+      "mod_forum_add_discussion",
+      {
+        forumid: forumId,
+        subject,
+        message,
+        messagformat: 1, // 1 = HTML, 0 = Moodle, 2 = Plain text, 3 = Markdown
+        options: [
+          ...(options?.subscribe !== undefined ? [{ name: "discussionsubscribe", value: options.subscribe }] : []),
+          ...(options?.pin ? [{ name: "pinned", value: true }] : []),
+        ],
+      }
+    );
+
+    if (data?.discussionid) {
+      return { success: true, discussionId: data.discussionid };
+    }
+
+    return {
+      success: false,
+      error: data?.message ?? data?.error ?? "Failed to add discussion",
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Add a reply post to a discussion via WS API.
+ * Uses mod_forum_add_discussion_post
+ */
+export async function addForumPostApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  postId: number, // Parent post ID to reply to
+  subject: string,
+  message: string,
+  options?: {
+    inlineAttachmentId?: number;
+    attachmentId?: number;
+  }
+): Promise<{ success: boolean; postId?: number; error?: string }> {
+  try {
+    // Build options array for Moodle WS API
+    const apiOptions: Array<{ name: string; value: string | number }> = [];
+
+    if (options?.inlineAttachmentId !== undefined) {
+      apiOptions.push({ name: "inlineattachmentsid", value: options.inlineAttachmentId });
+    }
+    if (options?.attachmentId !== undefined) {
+      apiOptions.push({ name: "attachmentsid", value: options.attachmentId });
+    }
+
+    const params: Record<string, unknown> = {
+      postid: postId,
+      subject,
+      message,
+      messageformat: 1, // 1 = HTML, 0 = Moodle, 2 = Plain text, 3 = Markdown
+    };
+
+    // Only add options if not empty
+    if (apiOptions.length > 0) {
+      params.options = apiOptions;
+    }
+
+    console.debug(`[DEBUG] add_discussion_post params:`, JSON.stringify(params, null, 2));
+
+    const data = await moodleApiCall<any>(
+      session,
+      "mod_forum_add_discussion_post",
+      params
+    );
+
+    if (data?.postid) {
+      return { success: true, postId: data.postid };
+    }
+
+    return {
+      success: false,
+      error: data?.message ?? data?.error ?? "Failed to add post",
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
   }
 }
 
@@ -1133,6 +1255,307 @@ export async function getResourcesByCoursesApi(
       modified: r.timemodified,
     };
   });
+}
+
+// ── Assignments via WS API ─────────────────────────────────────────────────────
+
+/**
+ * Extended AssignmentModule with courseId for API responses.
+ */
+export interface AssignmentModuleWithCourse {
+  id: number; // Assignment instance ID (for mod_assign_get_submission_status)
+  cmid: string; // Course module ID
+  name: string;
+  url: string;
+  courseId: number;
+  duedate?: number;
+  cutoffdate?: number;
+  allowSubmissionsFromDate?: number;
+  gradingduedate?: number;
+  lateSubmission?: boolean;
+  extensionduedate?: number;
+}
+
+/**
+ * Get assignments in courses via pure WS API.
+ */
+export async function getAssignmentsByCoursesApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  courseIds: number[]
+): Promise<AssignmentModuleWithCourse[]> {
+  if (courseIds.length === 0) return [];
+
+  const data = await moodleApiCall<{ courses?: unknown[] }>(
+    session,
+    "mod_assign_get_assignments",
+    { courseids: courseIds }
+  );
+
+  const assignments: AssignmentModuleWithCourse[] = [];
+
+  // The API returns an array of courses, each containing assignments
+  for (const course of (data?.courses ?? []) as any[]) {
+    if (!course.assignments) continue;
+
+    for (const a of course.assignments) {
+      assignments.push({
+        id: a.id,
+        cmid: a.cmid?.toString() ?? "",
+        name: a.name,
+        url: a.viewurl ?? "",
+        courseId: course.id,
+        duedate: a.duedate,
+        cutoffdate: a.cutoffdate,
+        allowSubmissionsFromDate: a.allowsubmissionsfromdate,
+        gradingduedate: a.gradingduedate,
+        lateSubmission: a.latesubmissions ? true : false,
+        extensionduedate: a.extensionduedate,
+      });
+    }
+  }
+
+  return assignments;
+}
+
+/**
+ * Get assignment submission status via pure WS API.
+ */
+export async function getSubmissionStatusApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  assignmentId: number
+): Promise<{
+  submitted: boolean;
+  graded: boolean;
+  grader: string | null;
+  grade: string | null;
+  feedback: string | null;
+  lastModified: number | null;
+  extensions: Array<{ id: number; filename: string; filesize: number }>;
+}> {
+  const siteInfo = await getSiteInfoApi(session);
+
+  const data = await moodleApiCall<any>(
+    session,
+    "mod_assign_get_submission_status",
+    {
+      assignid: assignmentId,
+      userid: siteInfo.userid,
+    }
+  );
+
+  const lastAttempt = data?.lastattempt;
+  // Note: API returns "submission" (singular), not "submissions" (plural)
+  const submission = lastAttempt?.submission;
+
+  // Find file submissions from submission plugins
+  const plugins = submission?.plugins || [];
+  const filePlugin = plugins.find((p: any) => p.type === "file");
+  const extensions = (filePlugin?.fileareas || [])
+    .flatMap((fa: any) => fa?.files || [])
+    .map((f: any) => ({
+      id: f.id,
+      filename: f.filename,
+      filesize: f.filesize,
+    }));
+
+  // Get feedback from the separate feedback object
+  const feedback = data?.feedback;
+  const commentsPlugin = feedback?.plugins?.find((p: any) => p.type === "comments");
+  const commentText = commentsPlugin?.editorfields?.find((e: any) => e.name === "comments")?.text || null;
+
+  return {
+    submitted: submission?.status === "submitted",
+    graded: lastAttempt?.gradingstatus === "graded",
+    grader: feedback?.gradername || null,
+    grade: feedback?.gradefordisplay || null,
+    feedback: commentText,
+    lastModified: submission?.timemodified || null,
+    extensions,
+  };
+}
+
+/**
+ * Save/submit an assignment via pure WS API.
+ * Supports online text submissions and file submissions (by draft ID).
+ */
+export async function saveSubmissionApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  assignmentId: number,
+  options: {
+    onlineText?: { text: string; format?: number };
+    fileId?: number; // Draft file ID from file upload
+    plugintype?: "onlinetext" | "file" | "comments";
+  }
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const siteInfo = await getSiteInfoApi(session);
+
+    // Build plugins array based on submission type
+    const plugins: any[] = [];
+
+    if (options.onlineText) {
+      plugins.push({
+        type: "onlinetext",
+        online_text: {
+          text: options.onlineText.text,
+          format: options.onlineText.format ?? 1,
+          itemid: 0,
+        },
+      });
+    }
+
+    if (options.fileId !== undefined) {
+      plugins.push({
+        type: "file",
+        files_filemanager: options.fileId,
+      });
+    }
+
+    await moodleApiCall<any>(
+      session,
+      "mod_assign_save_submission",
+      {
+        assignmentid: assignmentId,
+        userid: siteInfo.userid,
+        plugins,
+      }
+    );
+
+    return { success: true };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+// ── File Upload via WS API ──────────────────────────────────────────────────────
+
+/**
+ * Generate a unique draft item ID.
+ * Uses timestamp (last 8 digits) to ensure uniqueness.
+ */
+export function generateDraftItemId(): number {
+  // Use current timestamp in seconds, take last 8 digits
+  return Math.floor(Date.now() / 1000) % 100000000;
+}
+
+/**
+ * Upload a file to Moodle draft area via pure WS API.
+ * This is the first step before submitting files to assignments, forums, etc.
+ *
+ * Note: We generate our own draft item ID instead of asking Moodle for one.
+ */
+export async function uploadFileApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  filePath: string,
+  options?: {
+    draftId?: number; // Use specific draft ID, or auto-generate
+    filename?: string;
+    filepath?: string; // Draft area path (default: "/")
+  }
+): Promise<{ success: boolean; draftId?: number; error?: string }> {
+  try {
+    // Generate or use provided draft ID
+    const draftItemId = options?.draftId ?? generateDraftItemId();
+
+    // Read file content using fs.promises
+    const fileContent = await fs.promises.readFile(filePath);
+    const fileName = options?.filename || filePath.split(/[/\\]/).pop() || "unknown";
+
+    // Get site info for user context
+    const siteInfo = await getSiteInfoApi(session);
+    const userContextId = getUserContextId(siteInfo.userid);
+
+    // Prepare multipart form data
+    const formData = new FormData();
+    formData.append("token", session.wsToken);
+    formData.append("file", new Blob([fileContent]), fileName);
+    formData.append("filepath", options?.filepath || "/");
+    formData.append("itemid", String(draftItemId)); // Use our generated draft ID
+    formData.append("contextid", String(userContextId)); // Use calculated user context
+    formData.append("component", "user");
+    formData.append("filearea", "draft");
+    formData.append("qformat", ""); // Not used
+
+    // Upload via upload.php (uses multipart/form-data)
+    const url = `${session.moodleBaseUrl}/webservice/upload.php`;
+
+    const response = await fetch(url, {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!response.ok) {
+      return { success: false, error: `HTTP ${response.status}` };
+    }
+
+    const result = await response.json();
+
+    console.debug(`[DEBUG] upload.php response:`, JSON.stringify(result, null, 2));
+
+    // Check for errors in response
+    if (result?.error) {
+      return { success: false, error: result.message ?? result.error ?? "Upload failed" };
+    }
+
+    // Success - return the draft ID we used
+    return { success: true, draftId: draftItemId };
+  } catch (e) {
+    return { success: false, error: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/**
+ * Calculate user context ID in Moodle.
+ * User context ID = (userid * CONTEXT_DEPTH) + CONTEXT_USER
+ * Where CONTEXT_DEPTH = 10 and CONTEXT_USER = 30
+ */
+function getUserContextId(userId: number): number {
+  return userId * 10 + 30;
+}
+
+/**
+ * Get user's private files (not draft) via pure WS API.
+ * Draft files are temporary and cannot be listed, but private files can.
+ */
+export async function getDraftFilesApi(
+  session: { wsToken: string; moodleBaseUrl: string }
+): Promise<Array<{
+  itemId: number;
+  filename: string;
+  filesize: number;
+  filepath: string;
+  timeModified: number;
+  url: string;
+}>> {
+  const siteInfo = await getSiteInfoApi(session);
+  const userContextId = getUserContextId(siteInfo.userid);
+
+  const data = await moodleApiCall<any>(
+    session,
+    "core_files_get_files",
+    {
+      contextid: userContextId,
+      component: "user",
+      filearea: "private",
+      itemid: 0,
+      filepath: "/",
+      modified: null,
+    }
+  );
+
+  console.debug(`[DEBUG] core_files_get_files response:`, JSON.stringify(data, null, 2));
+
+  // The API returns a parents array with files inside
+  const files: any[] = data?.parents?.[0]?.files || data?.files || [];
+
+  return files.map((f: any) => ({
+    itemId: f.itemid || 0,
+    filename: f.filename || "",
+    filesize: f.filesize || 0,
+    filepath: f.filepath || "/",
+    timeModified: f.timemodified || 0,
+    url: f.url || "",
+  }));
 }
 
 // ── Messages via WS API ───────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
-import { getBaseDir, stripHtmlTags } from "../lib/utils.ts";
+import { getBaseDir, stripHtmlTags, getOutputFormat } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCoursesApi, getForumsApi, getForumDiscussionsApi, getDiscussionPostsApi } from "../lib/moodle.ts";
+import { getEnrolledCoursesApi, getForumsApi, getForumDiscussionsApi, getDiscussionPostsApi, addForumDiscussionApi, addForumPostApi } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
 import { loadWsToken, loadSesskey } from "../lib/token.ts";
 import path from "node:path";
@@ -20,11 +20,6 @@ interface ForumWithCourse {
 export function registerForumsCommand(program: Command): void {
   const forumsCmd = program.command("forums");
   forumsCmd.description("Forum operations");
-
-  function getOutputFormat(command: any): OutputFormat {
-    const opts = command.optsWithGlobals();
-    return (opts.output as OutputFormat) || "json";
-  }
 
   // Pure API context - no browser required (fast!)
   async function createApiContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
@@ -270,4 +265,122 @@ export function registerForumsCommand(program: Command): void {
         console.table(tablePosts);
       }
     });
+
+  forumsCmd
+    .command("post")
+    .description("Post a new discussion to a forum")
+    .argument("<forum-id>", "Forum ID")
+    .argument("<subject>", "Discussion subject")
+    .argument("<message>", "Discussion message")
+    .option("--subscribe", "Subscribe to the discussion", false)
+    .option("--pin", "Pin the discussion", false)
+    .action(async (forumId, subject, message, options, command) => {
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { log, session } = apiContext;
+
+      // Get courses to find the forum
+      const courses = await getEnrolledCoursesApi(session, {
+        classification: "inprogress",
+      });
+
+      const courseIds = courses.map(c => c.id);
+      const wsForums = await getForumsApi(session, courseIds);
+
+      // Find forum by cmid or instance ID
+      const targetForum = wsForums.find(
+        f => f.cmid.toString() === forumId || f.id === parseInt(forumId, 10)
+      );
+
+      if (!targetForum) {
+        log.error(`Forum not found: ${forumId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const course = courses.find(c => c.id === targetForum.courseid);
+      log.info(`Posting to forum: ${targetForum.name} (${course?.fullname})`);
+
+      const result = await addForumDiscussionApi(
+        session,
+        targetForum.id,
+        subject,
+        message,
+        { subscribe: options.subscribe, pin: options.pin }
+      );
+
+      if (result.success) {
+        log.success(`✓ Discussion posted successfully!`);
+        log.info(`  Discussion ID: ${result.discussionId}`);
+      } else {
+        log.error(`✗ Failed to post discussion: ${result.error}`);
+        process.exitCode = 1;
+      }
+    });
+
+  forumsCmd
+    .command("reply")
+    .description("Reply to a discussion post")
+    .argument("<post-id>", "Parent post ID to reply to")
+    .argument("<subject>", "Reply subject")
+    .argument("<message>", "Reply message")
+    .option("--attachment-id <id>", "Draft file ID for attachment")
+    .option("--inline-attachment-id <id>", "Draft file ID for inline attachment")
+    .action(async (postId, subject, message, options, command) => {
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
+
+      const { log, session } = apiContext;
+
+      log.info(`Replying to post: ${postId}`);
+      log.info(`  Subject: ${subject}`);
+      log.info(`  Message: ${message}`);
+      if (options.attachmentId) {
+        log.info(`  Attachment ID: ${options.attachmentId}`);
+      }
+
+      const result = await addForumPostApi(
+        session,
+        parseInt(postId, 10),
+        subject,
+        message,
+        {
+          attachmentId: options.attachmentId ? parseInt(options.attachmentId, 10) : undefined,
+          inlineAttachmentId: options.inlineAttachmentId ? parseInt(options.inlineAttachmentId, 10) : undefined,
+        }
+      );
+
+      if (result.success) {
+        log.success(`✓ Reply posted successfully!`);
+        log.info(`  Post ID: ${result.postId}`);
+      } else {
+        log.error(`✗ Failed to post reply: ${result.error}`);
+        process.exitCode = 1;
+      }
+    });
+}
+
+/**
+ * Prompt user for yes/no confirmation.
+ */
+async function promptConfirm(prompt: string): Promise<boolean> {
+  const readline = await import("node:readline");
+  const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout,
+  });
+
+  return new Promise((resolve) => {
+    rl.question(prompt, (answer) => {
+      rl.close();
+      resolve(/^y/i.test(answer));
+    });
+  });
 }

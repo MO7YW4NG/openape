@@ -19,6 +19,8 @@ import { registerForumsCommand } from "./commands/forums.ts";
 import { registerAnnouncementsCommand } from "./commands/announcements.ts";
 import { registerCalendarCommand } from "./commands/calendar.ts";
 import { registerSkillsCommand } from "./commands/skills.ts";
+import { registerAssignmentsCommand } from "./commands/assignments.ts";
+import { registerUploadCommand } from "./commands/upload.ts";
 
 const program = new Command();
 
@@ -47,6 +49,8 @@ registerForumsCommand(program);
 registerAnnouncementsCommand(program);
 registerCalendarCommand(program);
 registerSkillsCommand(program);
+registerAssignmentsCommand(program);
+registerUploadCommand(program);
 
 /**
  * Load configuration and authenticate, returning the context for commands.
