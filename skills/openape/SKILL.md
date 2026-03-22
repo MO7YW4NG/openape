@@ -9,34 +9,29 @@ Use the `openape` command to access CYCU iLearning (Moodle) platform. OpenApe pr
 
 ## Setup
 
-Install via npm:
+If `openape` is not installed:
 ```bash
 npm install -g @mo7yw4ng/openape
-```
-
-Or install via Deno/JSR:
-```bash
-deno install -A -g -n openape jsr:@openape/openape
 ```
 
 If not authenticated, run:
 ```bash
 openape login
 ```
-A browser will open for Microsoft OAuth SSO. Complete MFA login manually — no username/password input needed in the terminal.
+A browser will open for Microsoft OAuth SSO. Complete MFA login manually.
 
 Session is saved to `.auth/storage-state.json` and persists between runs. If session expires, run `openape login` again.
 
 ## Discovering Commands
 
-Every command supports `--help` for full option details:
+**Every command supports `--help` for full option details:**
 ```bash
 openape --help
 openape courses --help
 openape videos complete --help
 ```
 
-Add `--output json` to any command for machine-readable output. Use `--output csv` for spreadsheet format, `--output table` for human-readable tables, or `--output silent` to suppress output.
+Add `--output json` to any command for machine-readable output. Use `--output csv` for spreadsheet format, `--output table` for human-readable tables.
 
 ## Course Commands
 
@@ -89,17 +84,9 @@ openape videos list <course-id> --incomplete-only
 # Complete all incomplete videos in a course
 openape videos complete <course-id>
 
-# Dry-run: discover videos without completing
-openape videos complete <course-id> --dry-run
-
 # Complete all incomplete videos across all courses
 openape videos complete-all
-
-# Dry-run all courses
-openape videos complete-all --dry-run
 ```
-
-**Note:** Video completion forges SuperVideo progress AJAX calls to simulate watching the entire video. The server accepts the progress but completion status may take time to update in the course state.
 
 ### Downloading videos
 
@@ -319,9 +306,6 @@ openape materials download-all --level in_progress
 
 ## Tips
 
-- Use `--dry-run` with `videos complete` to preview what will be completed
 - Use `--level in_progress` (default) to focus on active courses
 - Use `--output json` for scripting and automation
 - Use `--output table` for human-readable output
-- Session persists after login, no need to re-authenticate
-- WS API mode is used by default for faster performance; browser mode is fallback

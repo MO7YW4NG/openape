@@ -9,11 +9,7 @@ import { saveSesskey, acquireWsToken, saveWsToken } from "../lib/token.ts";
 import path from "node:path";
 import fs from "node:fs";
 
-export function registerAuthCommand(program: Command): void {
-  const authCmd = program.command("auth");
-  authCmd.description("Authentication commands");
-
-  // Register login directly on program (not under auth subcommand)
+export function registerCommand(program: Command): void {
   program
     .command("login")
     .description("Login to iLearning manually and save session")
@@ -196,8 +192,7 @@ export function registerAuthCommand(program: Command): void {
       }
     });
 
-  // auth subcommand group (for status and other auth-related commands)
-  authCmd
+  program
     .command("status")
     .description("Check session status")
     .option("--session <path>", "Session file path", ".auth/storage-state.json")
@@ -249,7 +244,7 @@ export function registerAuthCommand(program: Command): void {
       }
     });
 
-  authCmd
+  program
     .command("logout")
     .description("Remove saved session")
     .option("--session <path>", "Session file path", ".auth/storage-state.json")

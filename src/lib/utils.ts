@@ -1,4 +1,5 @@
 import { dirname } from "node:path";
+import type { OutputFormat } from "./types.ts";
 
 /**
  * Returns the base directory for config/storage resolving.
@@ -7,9 +8,14 @@ import { dirname } from "node:path";
 export function getBaseDir(): string {
   // @ts-ignore - Deno global is available in Deno
   if (typeof Deno !== "undefined" && typeof Deno.execPath === "function") {
-    // @ts-ignore
-    const exeDir = dirname(Deno.execPath());
-    return exeDir.includes("deno") ? process.cwd() : exeDir;
+    try {
+      // @ts-ignore
+      const exeDir = dirname(Deno.execPath());
+      return exeDir.includes("deno") ? process.cwd() : exeDir;
+    } catch {
+      // Deno shim (dnt) or Deno not installed
+      return process.cwd();
+    }
   }
   // Node.js or dnt runtime
   return process.cwd();
@@ -48,4 +54,32 @@ export function extractCourseName(fullname: string): string {
   // Match: 4+ digits + course name (until (, -, or [)
   const match = cleaned.match(/\d{4,}([^([-]+)/);
   return match ? match[1].trim() : fullname;
+}
+
+/**
+ * Get output format from command options (global or local).
+ * Defaults to "json" if not specified.
+ */
+export function getOutputFormat(command: { optsWithGlobals(): { output?: OutputFormat } }): OutputFormat {
+  const opts = command.optsWithGlobals();
+  return (opts.output as OutputFormat) || "json";
+}
+
+/**
+ * Determine if logs should be silenced based on output format and verbosity.
+ * JSON output without verbose flag silences logs.
+ */
+export function shouldSilenceLogs(outputFormat: OutputFormat, verbose?: boolean): boolean {
+  return outputFormat === "json" && !verbose;
+}
+
+/**
+ * Sanitize filename by removing invalid characters and limiting length.
+ * Replaces invalid characters with underscores and limits to maxLength.
+ */
+export function sanitizeFilename(name: string, maxLength: number = 200): string {
+  return name
+    .replace(/[<>:"/\\|?*]/g, "_")
+    .replace(/\s+/g, "_")
+    .substring(0, maxLength);
 }

@@ -12,7 +12,7 @@ import denoJson from "../deno.json" with { type: "json" };
 import { registerCoursesCommand } from "./commands/courses.ts";
 import { registerVideosCommand } from "./commands/videos.ts";
 import { registerQuizzesCommand } from "./commands/quizzes.ts";
-import { registerAuthCommand } from "./commands/auth.ts";
+import { registerCommand } from "./commands/auth.ts";
 import { registerMaterialsCommand } from "./commands/materials.ts";
 import { registerGradesCommand } from "./commands/grades.ts";
 import { registerForumsCommand } from "./commands/forums.ts";
@@ -37,7 +37,7 @@ program
   .option("--headed", "Run browser in visible mode");
 
 // Register subcommands
-registerAuthCommand(program);
+registerCommand(program);
 registerCoursesCommand(program);
 registerVideosCommand(program);
 registerQuizzesCommand(program);

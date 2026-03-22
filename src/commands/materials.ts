@@ -1,11 +1,12 @@
-import { getBaseDir } from "../lib/utils.ts";
+import { getBaseDir, getOutputFormat, shouldSilenceLogs, sanitizeFilename } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCourses, getEnrolledCoursesApi, getResourcesByCoursesApi } from "../lib/moodle.ts";
+import { getEnrolledCourses, getEnrolledCoursesApi, getResourcesByCoursesApi, updateActivityCompletionStatusManually, getSiteInfoApi, moodleApiCall } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
 import { launchAuthenticated } from "../lib/auth.ts";
 import { extractSessionInfo } from "../lib/session.ts";
 import { closeBrowserSafely } from "../lib/auth.ts";
+import { formatAndOutput } from "../index.ts";
 import { loadWsToken } from "../lib/token.ts";
 import path from "node:path";
 import fs from "node:fs";
@@ -33,12 +34,6 @@ interface DownloadedFile {
 export function registerMaterialsCommand(program: Command): void {
   const materialsCmd = program.command("materials");
   materialsCmd.description("Material/resource operations");
-
-  // Helper to get output format from global or local options
-  function getOutputFormat(command: any): OutputFormat {
-    const opts = command.optsWithGlobals();
-    return (opts.output as OutputFormat) || "json";
-  }
 
   // Pure API context - no browser required (fast!)
   async function createApiContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
@@ -119,11 +114,6 @@ export function registerMaterialsCommand(program: Command): void {
       await browser.close();
       throw err;
     }
-  }
-
-  // Helper to sanitize filenames
-  function sanitizeFilename(name: string): string {
-    return name.replace(/[<>:"/\\|?*]/g, "_").replace(/\s+/g, "_");
   }
 
   // Helper to download a single resource
@@ -446,6 +436,196 @@ export function registerMaterialsCommand(program: Command): void {
         console.log(JSON.stringify(output));
       } finally {
         await closeBrowserSafely(browser, browserContext);
+      }
+    });
+
+  materialsCmd
+    .command("complete")
+    .description("Mark all incomplete resources (non-video) as complete in a course")
+    .argument("<course-id>", "Course ID")
+    .option("--dry-run", "Show what would be marked complete without doing it")
+    .option("--output <format>", "Output format: json|csv|table|silent")
+    .action(async (courseId, options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const { log, session } = apiContext;
+
+        // Get user ID
+        const siteInfo = await getSiteInfoApi(session);
+
+        // Get completion status for all activities in the course
+        const completionData = await moodleApiCall<any>(
+          session,
+          "core_completion_get_activities_completion_status",
+          { courseid: parseInt(courseId, 10), userid: siteInfo.userid }
+        );
+
+        if (!completionData?.statuses) {
+          log.info("No activities found in this course.");
+          return;
+        }
+
+        // Filter for resources (non-video) that have completion enabled but are not complete
+        const incompleteResources = completionData.statuses.filter((status: any) => {
+          // Only resources, not supervideo
+          if (status.modname === "supervideo") return false;
+          // Must have completion enabled
+          if (!status.hascompletion) return false;
+          // Must be incomplete
+          if (status.isoverallcomplete) return false;
+          return true;
+        });
+
+        if (incompleteResources.length === 0) {
+          log.info("All resources are already complete (or no resources with completion tracking).");
+          return;
+        }
+
+        log.info(`Found ${incompleteResources.length} incomplete resources to complete:`);
+        for (const resource of incompleteResources) {
+          log.info(`  - ${resource.name} (cmid: ${resource.cmid})`);
+        }
+
+        if (options.dryRun) {
+          log.info("\n[Dry run] No changes made.");
+          return;
+        }
+
+        // Mark each resource as complete
+        const results: Array<{ cmid: number; name: string; success: boolean }> = [];
+        for (const resource of incompleteResources) {
+          const success = await updateActivityCompletionStatusManually(session, resource.cmid, true);
+          results.push({
+            cmid: resource.cmid,
+            name: resource.name,
+            success,
+          });
+          if (success) {
+            log.success(`  ✓ Completed: ${resource.name}`);
+          } else {
+            log.error(`  ✗ Failed: ${resource.name}`);
+          }
+        }
+
+        const completed = results.filter(r => r.success).length;
+        const failed = results.filter(r => !r.success).length;
+        log.info(`\n執行結果: ${completed} 成功, ${failed} 失敗`);
+
+        if (output !== "silent") {
+          formatAndOutput(results as unknown as Record<string, unknown>[], output, log);
+        }
+      } catch (e) {
+        apiContext.log.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exitCode = 1;
+      }
+    });
+
+  materialsCmd
+    .command("complete-all")
+    .description("Mark all incomplete resources (non-video) as complete across all in-progress courses")
+    .option("--dry-run", "Show what would be marked complete without doing it")
+    .option("--level <type>", "Course level: in_progress (default) | all", "in_progress")
+    .option("--output <format>", "Output format: json|csv|table|silent")
+    .action(async (options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        const { log, session } = apiContext;
+
+        // Get user ID
+        const siteInfo = await getSiteInfoApi(session);
+
+        // Get all courses
+        const classification = options.level === "all" ? undefined : "inprogress";
+        const courses = await getEnrolledCoursesApi(session, { classification });
+
+        log.info(`Scanning ${courses.length} courses for incomplete resources...`);
+
+        const allResults: Array<{ courseId: number; courseName: string; cmid: number; name: string; success: boolean }> = [];
+        let totalIncomplete = 0;
+
+        for (const course of courses) {
+          try {
+            // Get completion status for all activities in the course
+            const completionData = await moodleApiCall<any>(
+              session,
+              "core_completion_get_activities_completion_status",
+              { courseid: course.id, userid: siteInfo.userid }
+            );
+
+            if (!completionData?.statuses) continue;
+
+            // Filter for resources (non-video) that have completion enabled but are not complete
+            const incompleteResources = completionData.statuses.filter((status: any) => {
+              if (status.modname === "supervideo") return false;
+              if (!status.hascompletion) return false;
+              if (status.isoverallcomplete) return false;
+              return true;
+            });
+
+            if (incompleteResources.length > 0) {
+              log.info(`\n${course.fullname}: ${incompleteResources.length} incomplete resources`);
+              totalIncomplete += incompleteResources.length;
+
+              if (options.dryRun) {
+                for (const resource of incompleteResources) {
+                  log.info(`  - ${resource.name} (cmid: ${resource.cmid})`);
+                }
+              } else {
+                for (const resource of incompleteResources) {
+                  const success = await updateActivityCompletionStatusManually(session, resource.cmid, true);
+                  allResults.push({
+                    courseId: course.id,
+                    courseName: course.fullname,
+                    cmid: resource.cmid,
+                    name: resource.name,
+                    success,
+                  });
+                  if (success) {
+                    log.success(`  ✓ Completed: ${resource.name}`);
+                  } else {
+                    log.error(`  ✗ Failed: ${resource.name}`);
+                  }
+                }
+              }
+            }
+          } catch (e) {
+            log.warn(`Failed to process course ${course.fullname}: ${e}`);
+          }
+        }
+
+        if (totalIncomplete === 0) {
+          log.info("\nAll resources are already complete (or no resources with completion tracking).");
+          return;
+        }
+
+        if (options.dryRun) {
+          log.info(`\n[Dry run] Found ${totalIncomplete} incomplete resources across ${courses.length} courses.`);
+          log.info("Run without --dry-run to mark them as complete.");
+          return;
+        }
+
+        const completed = allResults.filter(r => r.success).length;
+        const failed = allResults.filter(r => !r.success).length;
+        log.info(`\n執行結果: ${completed} 成功, ${failed} 失敗`);
+
+        if (output !== "silent") {
+          formatAndOutput(allResults as unknown as Record<string, unknown>[], output, log);
+        }
+      } catch (e) {
+        apiContext.log.error(`Error: ${e instanceof Error ? e.message : String(e)}`);
+        process.exitCode = 1;
       }
     });
 }

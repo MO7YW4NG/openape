@@ -44,6 +44,7 @@ export interface SuperVideoModule {
   cmid: string;
   name: string;
   url: string;
+  instance?: number;  // supervideo instance id (for WSAPI calls)
   isComplete: boolean;
 }
 

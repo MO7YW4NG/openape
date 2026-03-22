@@ -1,7 +1,7 @@
-import { getBaseDir } from "../lib/utils.ts";
+import { getBaseDir, getOutputFormat, shouldSilenceLogs, sanitizeFilename } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCourses, getEnrolledCoursesApi, getSupervideosInCourse, getSupervideosInCourseApi, getVideoMetadata, completeVideo, downloadVideo } from "../lib/moodle.ts";
+import { getEnrolledCourses, getEnrolledCoursesApi, getSupervideosInCourse, getSupervideosInCourseApi, getVideoMetadata, completeVideoApi, completeVideo, downloadVideo, getIncompleteVideosApi } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
 import { launchAuthenticated } from "../lib/auth.ts";
 import { extractSessionInfo } from "../lib/session.ts";
@@ -15,19 +15,14 @@ export function registerVideosCommand(program: Command): void {
   const videosCmd = program.command("videos");
   videosCmd.description("Video progress operations");
 
-  // Helper to get output format from global or local options
-  function getOutputFormat(command: any): OutputFormat {
-    const opts = command.optsWithGlobals();
-    return (opts.output as OutputFormat) || "json";
-  }
-
   // Pure API context - no browser required (fast!)
   async function createApiContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
     log: Logger;
     session: { wsToken: string; moodleBaseUrl: string };
   } | null> {
     const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
+    // Don't silence logs for commands that don't have explicit output format control
+    const outputFormat = command && command.optsWithGlobals ? getOutputFormat(command) : "table";
     const silent = outputFormat === "json" && !opts.verbose;
     const log = createLogger(opts.verbose, silent);
 
@@ -116,11 +111,11 @@ export function registerVideosCommand(program: Command): void {
         return;
       }
 
-      const videos = await getSupervideosInCourseApi(apiContext.session, parseInt(courseId, 10));
+      let videos = await getSupervideosInCourseApi(apiContext.session, parseInt(courseId, 10));
 
-      // Note: API doesn't provide completion status, so --incomplete-only shows all
+      // Filter for incomplete videos if requested
       if (options.incompleteOnly) {
-        apiContext.log.warn("--incomplete-only is not supported in API mode, showing all videos");
+        videos = videos.filter(v => !v.isComplete);
       }
 
       formatAndOutput(videos as unknown as Record<string, unknown>[], output, apiContext.log);
@@ -128,45 +123,64 @@ export function registerVideosCommand(program: Command): void {
 
   videosCmd
     .command("complete")
-    .description("Complete videos in a course (requires browser)")
+    .description("Complete videos in a course (uses API for list & completion, browser for metadata)")
     .argument("<course-id>", "Course ID")
     .option("--dry-run", "Discover videos but don't complete them")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (courseId, options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
+
+      // Get API context for getting incomplete videos and completion
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
+
+      // Get incomplete videos via API (fast, no browser needed)
+      const incompleteVideos = await getIncompleteVideosApi(apiContext.session, parseInt(courseId, 10));
+
+      if (incompleteVideos.length === 0) {
+        apiContext.log.info("所有影片已完成（或無影片）。");
+        return;
+      }
+
+      apiContext.log.info(`找到 ${incompleteVideos.length} 部未完成影片`);
+
+      // Dry-run: show videos without needing browser
+      if (options.dryRun) {
+        const results = incompleteVideos.map(v => ({ name: v.name, success: true }));
+        for (const video of incompleteVideos) {
+          apiContext.log.info(`  [試執行] ${video.name}`);
+        }
+        apiContext.log.info(`\n執行結果: ${results.length} 影片將被完成`);
+
+        if (output !== "silent") {
+          formatAndOutput(results as unknown as Record<string, unknown>[], output, apiContext.log);
+        }
+        return;
+      }
+
+      // Need browser only for getting viewId and duration (not needed for dry-run)
       const context = await createSessionContext(options, command);
       if (!context) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
-      const output: OutputFormat = getOutputFormat(command);
+      const { log, page, browser, context: browserContext } = context;
 
       try {
-        const videos = await getSupervideosInCourse(page, session, parseInt(courseId, 10), log, {
-          incompleteOnly: true,  // Only operate on incomplete videos
-        });
-
-        if (videos.length === 0) {
-          log.info("所有影片已完成（或無影片）。");
-          return;
-        }
-
         const results: Array<{ name: string; success: boolean; error?: string }> = [];
 
-        for (const sv of videos) {
+        for (const sv of incompleteVideos) {
           log.info(`處理中: ${sv.name}`);
 
           try {
             const video = await getVideoMetadata(page, sv.url, log);
 
-            if (options.dryRun) {
-              log.info(`  [試執行] viewId=${video.viewId}, duration=${video.duration}s`);
-              results.push({ name: sv.name, success: true });
-              continue;
-            }
-
-            const success = await completeVideo(page, session, { ...video, cmid: sv.cmid }, log);
+            // Use WS API for completion
+            const success = await completeVideoApi(apiContext.session, { ...video, cmid: sv.cmid.toString() });
             if (success) {
               log.success(`  已完成！`);
               results.push({ name: sv.name, success: true });
@@ -195,75 +209,109 @@ export function registerVideosCommand(program: Command): void {
 
   videosCmd
     .command("complete-all")
-    .description("Complete all incomplete videos across all courses (requires browser)")
+    .description("Complete all incomplete videos across all courses (uses API for list & completion, browser for metadata)")
     .option("--dry-run", "Discover videos but don't complete them")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
+
+      // Get API context for getting incomplete videos and completion
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
+
+      // Get all courses via API
+      const classification = undefined; // all courses
+      const courses = await getEnrolledCoursesApi(apiContext.session, { classification });
+
+      apiContext.log.info(`掃描 ${courses.length} 個課程...`);
+
+      // Collect all incomplete videos across all courses using flatMap for cleaner code
+      const allIncompleteVideos = (
+        await Promise.allSettled(
+          courses.map(async (course) => {
+            try {
+              const videos = await getIncompleteVideosApi(apiContext.session, course.id);
+              return videos.map((video) => ({
+                courseId: course.id,
+                courseName: course.fullname,
+                cmid: video.cmid,
+                name: video.name,
+                url: video.url,
+              }));
+            } catch (e) {
+              apiContext.log.warn(`無法取得課程 ${course.fullname} 的影片: ${e}`);
+              return [] as Array<{ courseId: number; courseName: string; cmid: number; name: string; url: string }>;
+            }
+          })
+        )
+      )
+        .filter((result) => result.status === "fulfilled")
+        .flatMap((result) => result.status === "fulfilled" ? result.value : []);
+
+      if (allIncompleteVideos.length === 0) {
+        apiContext.log.info("所有影片已完成（或無影片）。");
+        return;
+      }
+
+      apiContext.log.info(`找到 ${allIncompleteVideos.length} 部未完成影片`);
+
+      // Dry-run: show videos without needing browser
+      if (options.dryRun) {
+        for (const video of allIncompleteVideos) {
+          apiContext.log.info(`  [試執行] [${video.courseName}] ${video.name}`);
+        }
+        apiContext.log.info("\n===== 執行結果 =====");
+        apiContext.log.info(`掃描課程數: ${courses.length}`);
+        apiContext.log.info(`找到未完成影片: ${allIncompleteVideos.length}`);
+        apiContext.log.info(`執行影片數: ${allIncompleteVideos.length} (試執行)`);
+        return;
+      }
+
+      // Need browser only for getting viewId and duration (not needed for dry-run)
       const context = await createSessionContext(options, command);
       if (!context) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
-      const output: OutputFormat = getOutputFormat(command);
+      const { log, page, browser, context: browserContext } = context;
 
       try {
-        const courses = await getEnrolledCourses(page, session, log);
-
         const allResults: Array<{ courseName: string; name: string; success: boolean; error?: string }> = [];
-        let totalVideos = 0;
         let totalCompleted = 0;
         let totalFailed = 0;
 
-        for (const course of courses) {
-          log.info(`\n======================================`);
-          log.info(`課程: ${course.fullname}`);
-          log.info(`======================================`);
+        for (const video of allIncompleteVideos) {
+          log.info(`處理中: [${video.courseName}] ${video.name}`);
 
-          const videos = await getSupervideosInCourse(page, session, course.id, log);
+          try {
+            const metadata = await getVideoMetadata(page, video.url, log);
 
-          if (videos.length === 0) {
-            log.info("  所有影片已完成（或無影片）。");
-            continue;
-          }
-
-          totalVideos += videos.length;
-
-          for (const sv of videos) {
-            log.info(`  處理中: ${sv.name}`);
-
-            try {
-              const video = await getVideoMetadata(page, sv.url, log);
-
-              if (options.dryRun) {
-                log.info(`    [試執行] viewId=${video.viewId}, duration=${video.duration}s`);
-                allResults.push({ courseName: course.fullname, name: sv.name, success: true });
-                continue;
-              }
-
-              const success = await completeVideo(page, session, { ...video, cmid: sv.cmid }, log);
-              if (success) {
-                log.success(`    已完成！`);
-                allResults.push({ courseName: course.fullname, name: sv.name, success: true });
-                totalCompleted++;
-              } else {
-                log.error(`    失敗。`);
-                allResults.push({ courseName: course.fullname, name: sv.name, success: false, error: "Failed to complete" });
-                totalFailed++;
-              }
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              log.error(`    錯誤: ${msg}`);
-              allResults.push({ courseName: course.fullname, name: sv.name, success: false, error: msg });
+            // Use WS API for completion
+            const success = await completeVideoApi(apiContext.session, { ...metadata, cmid: video.cmid.toString() });
+            if (success) {
+              log.success(`  已完成！`);
+              allResults.push({ courseName: video.courseName, name: video.name, success: true });
+              totalCompleted++;
+            } else {
+              log.error(`  失敗。`);
+              allResults.push({ courseName: video.courseName, name: video.name, success: false, error: "Failed to complete" });
               totalFailed++;
             }
+          } catch (err) {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`  錯誤: ${msg}`);
+            allResults.push({ courseName: video.courseName, name: video.name, success: false, error: msg });
+            totalFailed++;
           }
         }
 
         log.info("\n===== 執行結果 =====");
         log.info(`掃描課程數: ${courses.length}`);
-        log.info(`掃描影片數: ${totalVideos}`);
+        log.info(`找到未完成影片: ${allIncompleteVideos.length}`);
         log.info(`執行影片數: ${totalCompleted}`);
         if (totalFailed > 0) log.warn(`失敗影片數: ${totalFailed}`);
 
@@ -274,14 +322,6 @@ export function registerVideosCommand(program: Command): void {
         await closeBrowserSafely(browser, browserContext);
       }
     });
-
-  // Helper function to sanitize filename
-  function sanitizeFilename(name: string): string {
-    return name
-      .replace(/[<>:"/\\|?*]/g, "_")
-      .replace(/\s+/g, "_")
-      .substring(0, 200);
-  }
 
   videosCmd
     .command("download")

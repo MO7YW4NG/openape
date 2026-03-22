@@ -1,5 +1,4 @@
 import type { Page } from "playwright-core";
-import { parse } from "node-html-parser";
 import { stripHtmlTags, extractCourseName } from "./utils.ts";
 import type {
   SessionInfo,
@@ -14,17 +13,6 @@ import type {
   CourseGrade,
 } from "./types.ts";
 
-// ── HTML Parsing Helpers ──────────────────────────────────────────────────
-
-/**
- * Get the HTML content of a page and parse it.
- */
-async function fetchAndParse(page: Page, url: string): Promise<ReturnType<typeof parse>> {
-  await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
-  const content = await page.content();
-  return parse(content);
-}
-
 // ── Core Moodle AJAX Wrapper ───────────────────────────────────────────
 
 /**
@@ -38,6 +26,12 @@ const WS_API_FUNCTIONS = new Set([
   "gradereport_user_get_grade_items",
   "core_calendar_get_calendar_events",
   "core_course_get_contents",
+  "core_course_get_course_module",
+  "core_completion_get_activities_completion_status",
+  "core_completion_update_activity_completion_status_manually",
+  "mod_supervideo_progress_save",
+  "mod_supervideo_progress_save_mobile",
+  "mod_supervideo_view_supervideo",
   "mod_quiz_get_quizzes_by_courses",
   "mod_resource_get_resources_by_courses",
   "core_message_get_messages",
@@ -292,23 +286,21 @@ export async function getSupervideosInCourse(
   const state = await getCourseState(page, session, courseId);
   const cms: any[] = state?.cm ?? [];
 
-  log.debug(`  Course state returned ${cms.length} modules`);
-
-  // Debug: log first few modules
-  for (let i = 0; i < Math.min(3, cms.length); i++) {
-    log.debug(`  Module ${i}: ${JSON.stringify(cms[i])}`);
-  }
-
   const allSupervideos = cms.filter((cm: any) => cm.module === "supervideo" || cm.modname === "supervideo");
 
-  log.debug(`  Found ${allSupervideos.length} supervideo modules`);
+  // Filter: Only include videos with completion tracking enabled (have completionstate field)
+  // and are not yet completed (completionstate != 1 or isoverallcomplete != true)
+  const incomplete = allSupervideos.filter((cm: any) => {
+    // Has completionstate field = completion tracking is enabled for this video
+    const hasCompletionTracking = "completionstate" in cm;
+    // Is not yet completed
+    const isIncomplete = cm.completionstate !== 1 && cm.isoverallcomplete !== true;
 
-  const incomplete = allSupervideos.filter(
-    (cm: any) => !("isoverallcomplete" in cm && cm.isoverallcomplete)
-  );
+    return hasCompletionTracking && isIncomplete;
+  });
 
   log.debug(
-    `  SuperVideo: ${allSupervideos.length} total, ${incomplete.length} incomplete`
+    `  SuperVideo: ${allSupervideos.length} total, ${incomplete.length} incomplete (with completion enabled)`
   );
 
   // Return only incomplete if requested, otherwise return all
@@ -553,11 +545,18 @@ export async function getCourseGradesApi(
 /**
  * Visit a SuperVideo activity page and extract view_id + duration.
  */
+/**
+ * Optimized video metadata extraction - minimal page load overhead.
+ * Blocks images, fonts, stylesheets to speed up viewId extraction.
+ */
 export async function getVideoMetadata(
   page: Page,
   activityUrl: string,
   log: Logger
 ): Promise<{ name: string; url: string; viewId: number; duration: number; existingPercent: number; videoSources: string[]; youtubeIds?: string[] }> {
+  // Block unnecessary resources for faster loading
+  await page.route("**/*.{png,jpg,jpeg,gif,webp,svg,ico,woff,woff2,ttf,css}", (route) => route.abort());
+
   await page.goto(activityUrl, { waitUntil: "domcontentloaded", timeout: 20000 });
 
   const name = await page.title();
@@ -734,7 +733,7 @@ export async function downloadVideo(
       const arrayBuffer = await response.arrayBuffer();
       const uint8Array = new Uint8Array(arrayBuffer);
 
-      // Write to file using Deno
+      // Write to file
       await Deno.writeFile(outputPath, uint8Array);
 
       return { success: true, path: outputPath, type: "direct" };
@@ -774,7 +773,56 @@ export async function downloadVideo(
 // ── Progress Completion (from original progress.ts) ───────────────────────
 
 /**
- * Complete a video by forging progress AJAX call.
+ * Build duration map array for video progress tracking.
+ * Cached and scaled per duration to avoid repeated allocations.
+ */
+function buildDurationMap(duration: number): string {
+  // Build the map array (0% to 100% in 1% increments)
+  const map = Array.from({ length: 100 }, (_, i) => ({
+    time: Math.round((duration * i) / 100),
+    percent: i,
+  }));
+  return JSON.stringify(map);
+}
+
+/**
+ * Complete a video using WS API (mobile service only).
+ * Uses mod_supervideo_progress_save_mobile which is accessible via moodle_mobile_app service token.
+ */
+export async function completeVideoApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  video: { viewId: number; duration: number; url: string; cmid?: string }
+): Promise<{ success: boolean; error?: string; result?: any }> {
+  const { viewId, duration } = video;
+
+  try {
+    const result = await moodleApiCall<any>(
+      session,
+      "mod_supervideo_progress_save_mobile",  // Use mobile service specific function
+      {
+        view_id: viewId,
+        currenttime: duration,
+        duration: duration,
+        percent: 100,
+        mapa: buildDurationMap(duration),
+      }
+    );
+
+    // Debug: log the full result
+    console.debug(`completeVideoApi result:`, JSON.stringify(result));
+
+    const success = result?.[0]?.success === true || result?.success === true;
+    return { success, error: success ? undefined : `API returned success=false, result=${JSON.stringify(result)}`, result };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.debug(`completeVideoApi error: ${msg}`);
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Complete a video by forging progress AJAX call (legacy, requires browser).
+ * Note: This uses sesskey-based AJAX which works for mod_supervideo_progress_save.
  */
 export async function completeVideo(
   page: Page,
@@ -784,18 +832,12 @@ export async function completeVideo(
 ): Promise<boolean> {
   const { viewId, duration } = video;
 
-  // Build duration map array (required by Moodle)
-  const map = Array.from({ length: 100 }, (_, i) => ({
-    time: Math.round((duration * i) / 100),
-    percent: i,
-  }));
-
   const payload = {
     view_id: viewId,
     currenttime: duration,
     duration: duration,
     percent: 100,
-    mapa: JSON.stringify(map),
+    mapa: buildDurationMap(duration),
   };
 
   const url = `${session.moodleBaseUrl}/lib/ajax/service.php?sesskey=${session.sesskey}&info=mod_supervideo_progress_save`;
@@ -826,26 +868,130 @@ export async function completeVideo(
   }
 }
 
+/**
+ * Update activity completion status manually via WS API.
+ * Used for marking resources as complete/incomplete.
+ */
+export async function updateActivityCompletionStatusManually(
+  session: { wsToken: string; moodleBaseUrl: string },
+  cmid: number,
+  completed: boolean
+): Promise<boolean> {
+  try {
+    const result = await moodleApiCall<any>(
+      session,
+      "core_completion_update_activity_completion_status_manually",
+      {
+        cmid: cmid,
+        completed: completed ? 1 : 0,
+      }
+    );
+    return result.status === true;
+  } catch (e) {
+    console.debug(`Failed to update completion status for cmid ${cmid}: ${e}`);
+    return false;
+  }
+}
+
 // ── Site Info (Get User ID) ───────────────────────────────────────────────────
+
+/** Cache for site info to avoid redundant API calls */
+let siteInfoCache: { userid: number; username: string; fullname: string; sitename: string } | null = null;
+let siteInfoCacheTime = 0;
+const SITE_INFO_CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
 /**
  * Get site info including current user ID via pure WS API.
+ * Results are cached for 5 minutes to avoid redundant calls.
  */
 export async function getSiteInfoApi(
   session: { wsToken: string; moodleBaseUrl: string }
 ): Promise<{ userid: number; username: string; fullname: string; sitename: string }> {
+  const now = Date.now();
+  if (siteInfoCache && (now - siteInfoCacheTime) < SITE_INFO_CACHE_TTL) {
+    return siteInfoCache;
+  }
+
   const data = await moodleApiCall<any>(
     session,
     "core_webservice_get_site_info",
     {}
   );
 
-  return {
+  siteInfoCache = {
     userid: data.userid,
     username: data.username,
     fullname: data.fullname,
     sitename: data.sitename,
   };
+  siteInfoCacheTime = now;
+
+  return siteInfoCache;
+}
+
+/**
+ * Get incomplete supervideos with completion tracking enabled via WS API.
+ * Uses core_completion_get_activities_completion_status to get only videos that:
+ * 1. Have completion tracking enabled (hascompletion: true)
+ * 2. Are not yet completed (isoverallcomplete: false or state !== 1)
+ */
+export async function getIncompleteVideosApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  courseId: number
+): Promise<Array<{ cmid: number; name: string; url: string }>> {
+  // Get user ID
+  const siteInfo = await getSiteInfoApi(session);
+
+  // Get completion status for all activities
+  const completionData = await moodleApiCall<any>(
+    session,
+    "core_completion_get_activities_completion_status",
+    { courseid: courseId, userid: siteInfo.userid }
+  );
+
+  if (!completionData?.statuses) {
+    return [];
+  }
+
+  // Get course contents to get URLs
+  const contentsData = await moodleApiCall<unknown[]>(
+    session,
+    "core_course_get_contents",
+    { courseid: courseId }
+  );
+
+  // Create a map of cmid to URL
+  const urlMap = new Map<number, string>();
+  for (const section of (contentsData as any[]) || []) {
+    if (!section.modules) continue;
+    for (const module of section.modules) {
+      if (module.id) {
+        urlMap.set(module.id, module.url);
+      }
+    }
+  }
+
+  // Filter for incomplete supervideos with completion tracking enabled
+  const incompleteVideos: Array<{ cmid: number; name: string; url: string }> = [];
+  for (const status of completionData.statuses) {
+    // Only supervideo modules
+    if (status.modname !== "supervideo") continue;
+
+    // Must have completion enabled
+    if (!status.hascompletion) continue;
+
+    // Must be incomplete
+    if (status.isoverallcomplete === true || status.state === 1) continue;
+
+    const url = urlMap.get(status.cmid) || "";
+    incompleteVideos.push({
+      cmid: status.cmid,
+      name: status.name,
+      url,
+    });
+  }
+
+  return incompleteVideos;
 }
 
 // ── Videos via WS API ─────────────────────────────────────────────────────────
@@ -877,10 +1023,45 @@ export async function getSupervideosInCourseApi(
           cmid: module.id.toString(),
           name: module.name,
           url: module.url,
-          isComplete: false, // API doesn't provide completion status
+          instance: module.instance,  // supervideo instance id (not cmid!)
+          isComplete: false, // Will be updated from completion API
         });
       }
     }
+  }
+
+  // Get completion status using core_completion_get_activities_completion_status
+  try {
+    // First get user ID
+    const siteInfo = await getSiteInfoApi(session);
+
+    const completionData = await moodleApiCall<any>(
+      session,
+      "core_completion_get_activities_completion_status",
+      { courseid: courseId, userid: siteInfo.userid }
+    );
+
+    // Create a map of cmid to completion status
+    const completionMap = new Map<number, boolean>();
+    if (completionData?.statuses) {
+      for (const status of completionData.statuses) {
+        // Only include modules that have completion enabled
+        if (status.hascompletion) {
+          completionMap.set(status.cmid, status.isoverallcomplete === true);
+        }
+      }
+    }
+
+    // Update isComplete based on completion data
+    for (const video of videos) {
+      const cmid = parseInt(video.cmid, 10);
+      if (completionMap.has(cmid)) {
+        video.isComplete = completionMap.get(cmid) ?? false;
+      }
+    }
+  } catch (e) {
+    // If completion API fails, continue with isComplete=false
+    console.debug(`Failed to get completion status: ${e}`);
   }
 
   return videos;

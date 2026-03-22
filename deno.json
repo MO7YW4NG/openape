@@ -1,6 +1,6 @@
 {
   "name": "@openape/openape",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "CLI tool for CYCU i-Learning platform",
   "license": "MIT",
   "exports": "./src/index.ts",

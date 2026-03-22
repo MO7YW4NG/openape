@@ -9,7 +9,7 @@
 - 📚 **課程資訊**：列出修課清單、成績、課程大綱與進度。
 - 📺 **影片輔助**：列出/下載影片，甚至自動標記為已觀看。
 - 📝 **測驗與教材**：快速查看測驗、下載教材。
-- 💬 **討論區與公告**：在終端機直接閱讀公告與討論區。
+- 💬 **討論區與公告**：閱讀公告與討論區。
 - 📅 **行事曆**：內建行事曆事件查詢與匯出。
 - 🤖 **Agent Skills**：提供 Claude Code 等 Skills 工作流支援。
 
@@ -36,8 +36,8 @@ deno install -A -g -n openape jsr:@openape/openape
 第一次使用需要登入，會開啟瀏覽器讓你手動完成登入，隨後會快取 Session 供未來使用。
 ```bash
 openape login          # 登入並儲存 session (開啟瀏覽器)
-openape auth status    # 檢查當前登入狀態
-openape auth logout    # 登出並清除 session
+openape status         # 檢查當前登入狀態
+openape logout         # 登出並清除 session
 ```
 
 ### 課程 (Courses)
@@ -45,7 +45,7 @@ openape auth logout    # 登出並清除 session
 openape courses list               # 列出所有課程 (支援 --incomplete-only, --level)
 openape courses info <id>          # 顯示特定課程的詳細資訊
 openape courses progress <id>      # 顯示特定課程的進度
-openape courses syllabus <id>      # 顯示課程大綱 (從 CMAP 取得)
+openape courses syllabus <id>      # 顯示課程大綱
 ```
 
 ### 影片 (Videos)
