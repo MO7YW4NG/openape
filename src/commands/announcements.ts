@@ -1,4 +1,4 @@
-import { getBaseDir } from "../lib/utils.ts";
+import { getBaseDir, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, OutputFormat } from "../lib/types.ts";
 import { getSiteInfoApi, getMessagesApi, getDiscussionPostsApi } from "../lib/moodle.ts";
@@ -109,27 +109,26 @@ export function registerAnnouncementsCommand(program: Command): void {
       // Apply limit
       let filteredAnnouncements = allAnnouncements.slice(0, limit);
 
-      const output = {
+      console.log(JSON.stringify({
         status: "success",
         timestamp: new Date().toISOString(),
         level: options.level,
-        announcements: filteredAnnouncements.map(a => ({
+        total_announcements: allAnnouncements.length,
+        shown: filteredAnnouncements.length,
+      }));
+      for (const a of filteredAnnouncements) {
+        console.log(JSON.stringify({
           course_id: a.course_id,
           course_name: a.course_name,
           id: a.id,
           subject: a.subject,
           author: a.author,
           author_id: a.authorId,
-          created_at: new Date(a.createdAt * 1000).toISOString(),
-          modified_at: new Date(a.modifiedAt * 1000).toISOString(),
+          created_at: formatTimestamp(a.createdAt),
+          modified_at: formatTimestamp(a.modifiedAt),
           unread: a.unread,
-        })),
-        summary: {
-          total_announcements: allAnnouncements.length,
-          shown: filteredAnnouncements.length,
-        },
-      };
-      console.log(JSON.stringify(output));
+        }));
+      }
     });
 
   announcementsCmd
@@ -162,8 +161,8 @@ export function registerAnnouncementsCommand(program: Command): void {
           subject: firstPost.subject,
           author: firstPost.author,
           author_id: firstPost.authorId,
-          created_at: new Date(firstPost.created * 1000).toISOString(),
-          modified_at: new Date(firstPost.modified * 1000).toISOString(),
+          created_at: formatTimestamp(firstPost.created),
+          modified_at: formatTimestamp(firstPost.modified),
           message: firstPost.message,
         },
       };

@@ -1,6 +1,4 @@
-import type { Page } from "playwright-core";
-
-// ── Core Types ────────────────────────────────────────────────────────
+// ── Core Infrastructure ────────────────────────────────────────────────
 
 export interface AppConfig {
   courseUrl: string;
@@ -15,8 +13,8 @@ export interface AppConfig {
 export interface SessionInfo {
   sesskey: string;
   moodleBaseUrl: string;
-  wsToken?: string;           // Moodle Web Service Token for API calls
-  wsTokenExpires?: number;   // Token expiry timestamp (Unix epoch)
+  wsToken?: string;
+  wsTokenExpires?: number;
 }
 
 export interface Logger {
@@ -27,7 +25,15 @@ export interface Logger {
   debug: (msg: string) => void;
 }
 
-// ── Course & Module Types ─────────────────────────────────────────────
+export type OutputFormat = "json" | "csv" | "table" | "silent";
+
+export interface OutputOptions {
+  format: OutputFormat;
+  fields?: string[];
+  pretty?: boolean;
+}
+
+// ── Course ────────────────────────────────────────────────────────────
 
 export interface EnrolledCourse {
   id: number;
@@ -40,41 +46,84 @@ export interface EnrolledCourse {
   enddate?: number;
 }
 
+// ── Video ─────────────────────────────────────────────────────────────
+
 export interface SuperVideoModule {
   cmid: string;
   name: string;
   url: string;
-  instance?: number;  // supervideo instance id (for WSAPI calls)
+  instance?: number;
   isComplete: boolean;
 }
 
-export interface VideoActivity {
-  name: string;
-  url: string;
-  viewId: number;
-  duration: number;
-  existingPercent: number;
-}
+// ── Quiz ──────────────────────────────────────────────────────────────
 
 export interface QuizModule {
-  cmid: string;
+  quizid: string;
   name: string;
   url: string;
   isComplete: boolean;
+  attemptsUsed: number;
+  maxAttempts: number;
   timeOpen?: number;
   timeClose?: number;
 }
 
-// ── Forum Types ───────────────────────────────────────────────────────
-
-export interface ForumModule {
-  cmid: string;
-  forumId: number;
-  name: string;
-  url: string;
-  courseId: number;
-  forumType: string; // 'general', 'news', 'social', etc.
+export interface QuizAttempt {
+  attempt: number;
+  attemptid: number;
+  quizid: number;
+  userid: number;
+  attemptnumber: number;
+  state: string;
+  timestart: number;
+  timefinish?: number;
+  timemodified?: number;
+  timecheckstate?: number;
+  sumgrades?: number;
+  layout?: string;
+  uniqueid?: number;
+  preview?: boolean;
 }
+
+export interface QuizQuestion {
+  slot: number;
+  type: string;
+  typeid?: number;
+  id: number;
+  category?: number;
+  contextid?: number;
+  contextlevel?: string;
+  contextinstanceid?: number;
+  quizid: number;
+  maxmark: number;
+  minmark?: number;
+  number?: number;
+  page: number;
+  html?: string;
+  status?: string;
+  stateclass?: string;
+  sequencecheck?: number;
+  questionnumber?: string;
+}
+
+export interface QuizAttemptData {
+  attempt: QuizAttempt;
+  questions: Record<number, QuizQuestion>;
+  nextpage?: number;
+  prevpage?: number;
+  messages?: string[];
+  quizflags?: Record<number, boolean>;
+}
+
+export interface QuizStartResult {
+  attempt: QuizAttempt;
+  page?: number;
+  messages?: string[];
+  readonly?: boolean;
+}
+
+// ── Forum ─────────────────────────────────────────────────────────────
 
 export interface ForumPost {
   id: number;
@@ -103,8 +152,8 @@ export interface ForumDiscussion {
   timeEnd?: number;
   userModified?: number;
   userModifiedFullName?: string;
-  postCount?: number; // numreplies
-  unread?: boolean; // numunread > 0
+  postCount?: number;
+  unread?: boolean;
   subject?: string;
   message?: string;
   pinned?: boolean;
@@ -112,106 +161,29 @@ export interface ForumDiscussion {
   starred?: boolean;
 }
 
-// ── Announcement Types ────────────────────────────────────────────────
+// ── Calendar ──────────────────────────────────────────────────────────
 
-export interface AnnouncementPost {
+export interface CalendarEvent {
   id: number;
-  subject: string;
-  content: string;
-  author: string;
-  authorId?: number;
-  courseId: number;
-  createdAt: number;
-  modifiedAt?: number;
-  attachments?: AnnouncementAttachment[];
-  unread?: boolean;
-}
-
-export interface AnnouncementAttachment {
-  filename: string;
-  url: string;
-  filesize: number;
-  mimetype: string;
-}
-
-// ── Material/Resource Types ───────────────────────────────────────────
-
-export interface ResourceModule {
-  cmid: string;
   name: string;
-  url: string;
-  courseId: number;
-  modType: string; // 'resource', 'url', 'folder', 'page', etc.
-  mimetype?: string;
-  filesize?: number;
-  modified?: number;
-}
-
-export interface FolderContents {
-  files: ResourceFile[];
-  folders: FolderInfo[];
-}
-
-export interface ResourceFile {
-  filename: string;
-  url: string;
-  filesize: number;
-  mimetype: string;
-  modified: number;
-  path?: string; // for nested files in folders
-}
-
-export interface FolderInfo {
-  name: string;
-  id: number;
-  path: string;
-}
-
-// ── Assignment Types ─────────────────────────────────────────────────
-
-export interface AssignmentModule {
-  cmid: string;
-  name: string;
-  url: string;
-  courseId: number;
-  duedate?: number;
-  cutoffdate?: number;
-  allowSubmissionsFromDate?: number;
-  gradingduedate?: number;
-  submissionStatus?: string;
-  grade?: GradeInfo;
-  lateSubmission?: boolean;
-  extensionduedate?: number;
-}
-
-export interface AssignmentSubmission {
-  id: number;
-  assignmentId: number;
-  userId: number;
-  timemodified: number;
-  status: string; // 'submitted', 'draft', 'new'
-  files?: SubmissionFile[];
-  grade?: GradeInfo;
-  feedback?: string;
-}
-
-export interface SubmissionFile {
-  filename: string;
-  url: string;
-  filesize: number;
-  mimetype: string;
-  timemodified: number;
-}
-
-export interface GradeInfo {
-  grade: string;
-  gradeFormatted: string;
-  grader?: string;
+  description?: string;
+  format: number;
+  courseid?: number;
+  categoryid?: number;
+  groupid?: number;
+  userid?: number;
+  moduleid?: number;
+  modulename?: string;
+  instance?: number;
+  eventtype: string;
+  timestart: number;
+  timeduration?: number;
   timedue?: number;
-  timemodified?: number;
+  visible?: number;
+  location?: string;
 }
 
-// ── Grade Types ──────────────────────────────────────────────────────
+// ── Grades ────────────────────────────────────────────────────────────
 
 export interface CourseGrade {
   courseId: number;
@@ -228,90 +200,22 @@ export interface GradeItem {
   name: string;
   grade?: string;
   gradeFormatted?: string;
-  range?: string; // e.g., "0-100"
+  range?: string;
   percentage?: number;
   weight?: number;
   feedback?: string;
   graded?: boolean;
 }
 
-// ── Calendar Types ───────────────────────────────────────────────────
+// ── Materials ─────────────────────────────────────────────────────────
 
-export interface CalendarEvent {
-  id: number;
+export interface ResourceModule {
+  cmid: string;
   name: string;
-  description?: string;
-  format: number; // 0=None, 1=HTML, 2=Plain, 3=Markdown
-  courseid?: number;
-  categoryid?: number;
-  groupid?: number;
-  userid?: number;
-  moduleid?: number;
-  modulename?: string;
-  instance?: number;
-  eventtype: string; // 'user', 'group', 'course', 'site', 'due'
-  timestart: number;
-  timeduration?: number;
-  timedue?: number;
-  visible?: number;
-  location?: string;
-}
-
-// ── LLM & Quiz Types ─────────────────────────────────────────────────
-
-export interface QuestionParsing {
-  id: string;
-  text: string;
-  options: { value: string; text: string }[];
-  type: "radio" | "checkbox";
-}
-
-export interface QuestionAnswer {
-  questionId: string;
-  reasoning: string;
-  answerValues: string[];
-}
-
-// ── Output Format Types ──────────────────────────────────────────────
-
-export type OutputFormat = "json" | "csv" | "table" | "silent";
-
-export interface OutputOptions {
-  format: OutputFormat;
-  fields?: string[]; // for CSV output
-  pretty?: boolean; // for JSON output
-}
-
-// ── AJAX Types ───────────────────────────────────────────────────────
-
-export interface ProgressPayload {
-  view_id: number;
-  currenttime: number;
-  duration: number;
-  percent: number;
-  mapa: string;
-}
-
-export interface AjaxResponse {
-  error: boolean;
-  data?: { success?: boolean; exec?: string };
-  exception?: { message: string; errorcode: string };
-}
-
-// ── CLI Command Types ────────────────────────────────────────────────
-
-export interface CommandContext {
-  page: Page;
-  session: SessionInfo;
-  config: AppConfig;
-  log: Logger;
-}
-
-export interface CommandOptions {
-  output?: OutputFormat;
-  courseUrl?: string;
-  courseId?: number;
-  verbose?: boolean;
-  headed?: boolean;
-  dryRun?: boolean;
+  url: string;
+  courseId: number;
+  modType: string;
+  mimetype?: string;
+  filesize?: number;
+  modified?: number;
 }

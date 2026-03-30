@@ -1,7 +1,7 @@
-import { getBaseDir, stripHtmlTags, getOutputFormat } from "../lib/utils.ts";
+import { getBaseDir, stripHtmlTags, getOutputFormat, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCoursesApi, getForumsApi, getForumDiscussionsApi, getDiscussionPostsApi, addForumDiscussionApi, addForumPostApi } from "../lib/moodle.ts";
+import { getEnrolledCoursesApi, getForumsApi, getForumDiscussionsApi, getDiscussionPostsApi, addForumDiscussionApi, addForumPostApi, deleteForumPostApi } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
 import { loadWsToken, loadSesskey } from "../lib/token.ts";
 import path from "node:path";
@@ -13,6 +13,7 @@ interface ForumWithCourse {
   cmid: string;
   forum_id: number;
   name: string;
+  intro: string;
   timemodified: number;
   // url: string;
 }
@@ -87,6 +88,7 @@ export function registerForumsCommand(program: Command): void {
           allForums.push({
             course_id: wsForum.courseid,
             course_name: course.fullname,
+            intro: wsForum.intro,
             cmid: wsForum.cmid.toString(),
             forum_id: wsForum.id,
             name: wsForum.name,
@@ -96,17 +98,15 @@ export function registerForumsCommand(program: Command): void {
         }
       }
 
-      const result = {
+      console.log(JSON.stringify({
         status: "success",
         timestamp: new Date().toISOString(),
-        forums: allForums,
-        summary: {
-          total_courses: courses.length,
-          total_forums: allForums.length,
-        },
-      };
-
-      console.log(JSON.stringify(result));
+        total_courses: courses.length,
+        total_forums: allForums.length,
+      }));
+      for (const forum of allForums) {
+        console.log(JSON.stringify(forum));
+      }
     });
 
   forumsCmd
@@ -137,6 +137,7 @@ export function registerForumsCommand(program: Command): void {
           allForums.push({
             course_id: wsForum.courseid,
             course_name: course.fullname,
+            intro: wsForum.intro,
             cmid: wsForum.cmid.toString(),
             forum_id: wsForum.id,
             name: wsForum.name,
@@ -145,17 +146,15 @@ export function registerForumsCommand(program: Command): void {
         }
       }
 
-      const result = {
+      console.log(JSON.stringify({
         status: "success",
         timestamp: new Date().toISOString(),
-        forums: allForums,
-        summary: {
-          total_courses: courses.length,
-          total_forums: allForums.length,
-        },
-      };
-
-      console.log(JSON.stringify(result));
+        total_courses: courses.length,
+        total_forums: allForums.length,
+      }));
+      for (const forum of allForums) {
+        console.log(JSON.stringify(forum));
+      }
     });
 
   forumsCmd
@@ -195,27 +194,29 @@ export function registerForumsCommand(program: Command): void {
       // Get discussions via WS API
       const discussions = await getForumDiscussionsApi(apiContext.session, targetForum.id);
 
-      const result = {
+      // Output NDJSON: one line per discussion entry for stream-friendly parsing
+      const meta = {
         status: "success",
         timestamp: new Date().toISOString(),
         forum_id: targetForum.id,
         forum_name: targetForum.name,
+        forum_intro: targetForum.intro,
         course_id: course?.id,
         course_name: course?.fullname,
-        discussions: discussions.map(d => ({
+        total_discussions: discussions.length,
+      };
+      console.log(JSON.stringify(meta));
+      for (const d of discussions) {
+        console.log(JSON.stringify({
           id: d.id,
           name: d.name,
           user_id: d.userId,
           time_modified: d.timeModified,
           post_count: d.postCount,
           unread: d.unread,
-          message: (stripHtmlTags(d.message || "")).substring(0, 250) + "...",
-        })),
-        summary: {
-          total_discussions: discussions.length,
-        },
-      };
-      console.log(JSON.stringify(result));
+          message: stripHtmlTags(d.message || ""),
+        }));
+      }
     });
 
   forumsCmd
@@ -243,8 +244,8 @@ export function registerForumsCommand(program: Command): void {
             subject: p.subject,
             author: p.author,
             author_id: p.authorId,
-            created: new Date(p.created * 1000).toISOString(),
-            modified: new Date(p.modified * 1000).toISOString(),
+            created: formatTimestamp(p.created),
+            modified: formatTimestamp(p.modified),
             message: p.message,
             unread: p.unread,
           })),
@@ -309,8 +310,7 @@ export function registerForumsCommand(program: Command): void {
         session,
         targetForum.id,
         subject,
-        message,
-        { subscribe: options.subscribe, pin: options.pin }
+        message
       );
 
       if (result.success) {
@@ -365,22 +365,27 @@ export function registerForumsCommand(program: Command): void {
         process.exitCode = 1;
       }
     });
-}
 
-/**
- * Prompt user for yes/no confirmation.
- */
-async function promptConfirm(prompt: string): Promise<boolean> {
-  const readline = await import("node:readline");
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-  });
+  forumsCmd
+    .command("delete")
+    .description("Delete a forum post or discussion (by post ID)")
+    .argument("<post-id>", "Post ID to delete (deletes entire discussion if it's the first post)")
+    .action(async (postId, options, command) => {
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
 
-  return new Promise((resolve) => {
-    rl.question(prompt, (answer) => {
-      rl.close();
-      resolve(/^y/i.test(answer));
+      const { log, session } = apiContext;
+
+      const result = await deleteForumPostApi(session, parseInt(postId, 10));
+
+      if (result.success) {
+        log.success(`✓ Post ${postId} deleted successfully!`);
+      } else {
+        log.error(`✗ Failed to delete post: ${result.error}`);
+        process.exitCode = 1;
+      }
     });
-  });
 }

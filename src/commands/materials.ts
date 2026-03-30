@@ -1,9 +1,9 @@
-import { getBaseDir, getOutputFormat, shouldSilenceLogs, sanitizeFilename } from "../lib/utils.ts";
+import { getBaseDir, getOutputFormat, shouldSilenceLogs, sanitizeFilename, getSessionPath, formatFileSize } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
 import { getEnrolledCourses, getEnrolledCoursesApi, getResourcesByCoursesApi, updateActivityCompletionStatusManually, getSiteInfoApi, moodleApiCall } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
-import { launchAuthenticated } from "../lib/auth.ts";
+import { launchAuthenticated, createApiContext } from "../lib/auth.ts";
 import { extractSessionInfo } from "../lib/session.ts";
 import { closeBrowserSafely } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
@@ -35,42 +35,6 @@ export function registerMaterialsCommand(program: Command): void {
   const materialsCmd = program.command("materials");
   materialsCmd.description("Material/resource operations");
 
-  // Pure API context - no browser required (fast!)
-  async function createApiContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
-    log: Logger;
-    session: { wsToken: string; moodleBaseUrl: string };
-  } | null> {
-    const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
-    const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent);
-
-    const baseDir = getBaseDir();
-    const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
-
-    // Check if session exists
-    if (!fs.existsSync(sessionPath)) {
-      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
-      log.info(`Session 預期位置: ${sessionPath}`);
-      return null;
-    }
-
-    // Try to load WS token
-    const wsToken = loadWsToken(sessionPath);
-    if (!wsToken) {
-      log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
-      return null;
-    }
-
-    return {
-      log,
-      session: {
-        wsToken,
-        moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-      },
-    };
-  }
-
   // Helper function to create session context (for download commands)
   async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
     log: Logger;
@@ -84,8 +48,7 @@ export function registerMaterialsCommand(program: Command): void {
     const silent = outputFormat === "json" && !opts.verbose;
     const log = createLogger(opts.verbose, silent);
 
-    const baseDir = getBaseDir();
-    const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
+    const sessionPath = getSessionPath();
 
     if (!fs.existsSync(sessionPath)) {
       log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
@@ -132,9 +95,7 @@ export function registerMaterialsCommand(program: Command): void {
 
       // Create course directory
       const courseDir = path.join(outputDir, sanitizeFilename(resource.course_name));
-      if (!fs.existsSync(courseDir)) {
-        fs.mkdirSync(courseDir, { recursive: true });
-      }
+      await fs.promises.mkdir(courseDir, { recursive: true });
 
       // Navigate to resource page
       log.debug(`  Downloading: ${resource.name}`);
@@ -187,8 +148,8 @@ export function registerMaterialsCommand(program: Command): void {
       // Save file
       await download.saveAs(outputPath);
 
-      const stats = fs.statSync(outputPath);
-      log.success(`    Downloaded: ${filename} (${(stats.size / 1024).toFixed(1)} KB)`);
+      const stats = await fs.promises.stat(outputPath);
+      log.success(`    Downloaded: ${filename} (${formatFileSize(stats.size, 1)} KB)`);
 
       return {
         filename,

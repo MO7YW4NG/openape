@@ -10,7 +10,7 @@ Use `openape` command to access CYCU iLearning (Moodle) platform.
 ## Setup
 
 ```bash
-# Install (if needed)
+# Install globally via npm
 npm install -g @mo7yw4ng/openape
 
 # Login (opens browser for Microsoft OAuth SSO)
@@ -42,7 +42,11 @@ openape videos download <course-id> [--output-dir ./downloads/videos]
 ```bash
 openape quizzes list <course-id>
 openape quizzes list-all [--level in_progress|all]
-openape quizzes open <quiz-url>
+openape quizzes start <quiz-id>
+openape quizzes info <attempt-id> [--page <number>]
+openape quizzes save <attempt-id> '<answers-json>'
+# answers-json example: '[{"slot":1,"answer":"0"}]'
+# multichoice: number, multichoices: "0,2", shortanswer: "text"
 ```
 
 ### Materials
@@ -50,6 +54,8 @@ openape quizzes open <quiz-url>
 openape materials list-all [--level in_progress|all]
 openape materials download <course-id>
 openape materials download-all [--output-dir ./downloads]
+openape materials complete <course-id>
+openape materials complete-all
 ```
 
 ### Assignments
@@ -74,6 +80,7 @@ openape forums discussions <forum-id>
 openape forums posts <discussion-id>
 openape forums post <forum-id> <subject> <message> [--subscribe] [--pin]
 openape forums reply <discussion-id> <subject> <message> [--parent-id <id>]
+openape forums delete <post-id>
 ```
 
 ### Announcements
@@ -86,6 +93,17 @@ openape announcements read <announcement-id>
 ```bash
 openape calendar events [--course-id <id>] [--events-after <date>] [--events-before <date>]
 openape calendar export [--format json|ics] [--output <file>]
+```
+
+### Upload
+```bash
+openape upload file <file-path>
+```
+
+### Skills
+```bash
+openape skills install [claude|codex|opencode]
+openape skills show
 ```
 
 ## Output Formats
@@ -109,6 +127,9 @@ openape announcements list-all --unread-only
 openape videos complete-all --dry-run  # preview
 openape videos complete-all            # execute
 
+# Auto-complete materials
+openape materials complete-all
+
 # Download materials
 openape materials download-all --output-dir ./semester
 
@@ -117,4 +138,9 @@ openape grades summary
 
 # Post to forum
 openape forums post 26617 "簽到" "11144238 王敏權"
+
+# Take a quiz
+openape quizzes start 12345
+openape quizzes info 234210
+openape quizzes save 234210 '[{"slot":1,"answer":"0"}]'
 ```

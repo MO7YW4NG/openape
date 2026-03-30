@@ -28,11 +28,9 @@ async function readSkillContent(): Promise<string> {
     // When running from source: src/commands/ → ../../skills/openape/SKILL.md
     // When bundled by dnt into build/: esm/commands/ or script/ → ../../skills/openape/SKILL.md
     const localPath = path.resolve(normalized, "..", "..", "skills", SKILL_NAME, "SKILL.md");
-    if (fs.existsSync(localPath)) {
-      return fs.readFileSync(localPath, "utf-8");
-    }
+    return await fs.promises.readFile(localPath, "utf-8");
   } catch {
-    // import.meta.url may be unavailable in some environments
+    // import.meta.url may be unavailable in some environments, or file doesn't exist
   }
 
   // Fallback: fetch from GitHub
@@ -90,11 +88,8 @@ export function registerSkillsCommand(program: Command): void {
           console.log(`Installing to ${target.name} (${target.path})...`);
           const destDir = path.join(target.path, SKILL_NAME);
 
-          if (!fs.existsSync(destDir)) {
-            fs.mkdirSync(destDir, { recursive: true });
-          }
-
-          fs.writeFileSync(path.join(destDir, "SKILL.md"), content, "utf-8");
+          await fs.promises.mkdir(destDir, { recursive: true });
+          await fs.promises.writeFile(path.join(destDir, "SKILL.md"), content, "utf-8");
           console.log(`  \x1b[32m✔\x1b[0m ${SKILL_NAME} installed!`);
         }
 

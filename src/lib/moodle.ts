@@ -7,6 +7,10 @@ import type {
   EnrolledCourse,
   SuperVideoModule,
   QuizModule,
+  QuizAttempt,
+  QuizAttemptData,
+  QuizQuestion,
+  QuizStartResult,
   ResourceModule,
   ForumDiscussion,
   ForumPost,
@@ -26,6 +30,7 @@ const WS_API_FUNCTIONS = new Set([
   "mod_forum_get_forum_discussion_posts",
   "mod_forum_add_discussion",
   "mod_forum_add_discussion_post",
+  "mod_forum_delete_post",
   "core_files_upload",
   "core_files_get_files",
   "core_files_get_unused_draft_itemid",
@@ -39,6 +44,8 @@ const WS_API_FUNCTIONS = new Set([
   "mod_supervideo_progress_save_mobile",
   "mod_supervideo_view_supervideo",
   "mod_quiz_get_quizzes_by_courses",
+  "mod_quiz_start_attempt",
+  "mod_quiz_get_attempt_data",
   "mod_resource_get_resources_by_courses",
   "mod_assign_get_assignments",
   "mod_assign_save_submission",
@@ -341,7 +348,7 @@ export async function getSupervideosInCourse(
 export async function getForumsApi(
   session: { wsToken: string; moodleBaseUrl: string },
   courseIds: number[]
-): Promise<Array<{ id: number; cmid: number; name: string; courseid: number; timemodified: number }>> {
+): Promise<Array<{ id: number; cmid: number; name: string; intro: string; courseid: number; timemodified: number }>> {
   const data = await moodleApiCall<any[]>(
     session,
     "mod_forum_get_forums_by_courses",
@@ -352,6 +359,7 @@ export async function getForumsApi(
     id: f.id,
     cmid: f.cmid,
     name: f.name,
+    intro: f.intro,
     courseid: f.course,  // API returns 'course' not 'courseid'
     timemodified: f.timemodified,
   }));
@@ -446,15 +454,36 @@ export async function getDiscussionPostsApi(
 }
 
 /**
- * Add a new discussion to a forum via WS API.
- * Uses mod_forum_add_discussion
+ * Delete a forum post. If the post is a discussion's topic post,
+ * the entire discussion is deleted.
+ */
+export async function deleteForumPostApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  postId: number,
+): Promise<{ success: boolean; error?: string }> {
+  try {
+    const data = await moodleApiCall<{ status: boolean; warnings: unknown[] }>(
+      session,
+      "mod_forum_delete_post",
+      { postid: postId }
+    );
+    return { success: data?.status === true };
+  } catch (error) {
+    return {
+      success: false,
+      error: error instanceof Error ? error.message : String(error),
+    };
+  }
+}
+
+/**
+ * Add a new discussion to a forum.
  */
 export async function addForumDiscussionApi(
   session: { wsToken: string; moodleBaseUrl: string },
   forumId: number,
   subject: string,
   message: string,
-  options?: { subscribe?: boolean; pin?: boolean }
 ): Promise<{ success: boolean; discussionId?: number; error?: string }> {
   try {
     const data = await moodleApiCall<any>(
@@ -463,12 +492,8 @@ export async function addForumDiscussionApi(
       {
         forumid: forumId,
         subject,
-        message,
-        messagformat: 1, // 1 = HTML, 0 = Moodle, 2 = Plain text, 3 = Markdown
-        options: [
-          ...(options?.subscribe !== undefined ? [{ name: "discussionsubscribe", value: options.subscribe }] : []),
-          ...(options?.pin ? [{ name: "pinned", value: true }] : []),
-        ],
+        message: message.replace(/\n/g, "<br>"),
+        messageformat: 1,
       }
     );
 
@@ -489,8 +514,7 @@ export async function addForumDiscussionApi(
 }
 
 /**
- * Add a reply post to a discussion via WS API.
- * Uses mod_forum_add_discussion_post
+ * Add a reply post to a discussion.
  */
 export async function addForumPostApi(
   session: { wsToken: string; moodleBaseUrl: string },
@@ -516,7 +540,7 @@ export async function addForumPostApi(
     const params: Record<string, unknown> = {
       postid: postId,
       subject,
-      message,
+      message: message.replace(/\n/g, "<br>"),
       messageformat: 1, // 1 = HTML, 0 = Moodle, 2 = Plain text, 3 = Markdown
     };
 
@@ -931,13 +955,13 @@ export async function completeVideoApi(
     );
 
     // Debug: log the full result
-    console.debug(`completeVideoApi result:`, JSON.stringify(result));
+    // console.debug(`completeVideoApi result:`, JSON.stringify(result));
 
     const success = result?.[0]?.success === true || result?.success === true;
     return { success, error: success ? undefined : `API returned success=false, result=${JSON.stringify(result)}`, result };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.debug(`completeVideoApi error: ${msg}`);
+    // console.debug(`completeVideoApi error: ${msg}`);
     return { success: false, error: msg };
   }
 }
@@ -1192,6 +1216,49 @@ export async function getSupervideosInCourseApi(
 // ── Quizzes via WS API ────────────────────────────────────────────────────────
 
 /**
+ * Get user attempts for given quiz IDs via WS API.
+ * Returns a map of quiz ID -> { finished: boolean, attemptsUsed: number }.
+ * Note: mod_quiz_get_user_attempts only accepts a single quizid, so we query in parallel.
+ */
+async function getUserQuizAttemptInfo(
+  session: { wsToken: string; moodleBaseUrl: string },
+  quizIds: number[]
+): Promise<Map<number, { finished: boolean; attemptsUsed: number }>> {
+  if (quizIds.length === 0) return new Map();
+
+  const info = new Map<number, { finished: boolean; attemptsUsed: number }>();
+
+  // Query each quiz in parallel (API only accepts single quizid)
+  const results = await Promise.allSettled(
+    quizIds.map(quizId =>
+      moodleApiCall<{ attempts?: unknown[] }>(
+        session,
+        "mod_quiz_get_user_attempts",
+        { quizid: quizId }
+      )
+    )
+  );
+
+  for (let i = 0; i < quizIds.length; i++) {
+    const quizId = quizIds[i];
+    const result = results[i];
+    if (result.status === "fulfilled" && result.value?.attempts) {
+      let used = 0;
+      let hasFinished = false;
+      for (const a of result.value.attempts as any[]) {
+        used++;
+        if (a.state === "finished") hasFinished = true;
+      }
+      info.set(quizId, { finished: hasFinished, attemptsUsed: used });
+    } else {
+      info.set(quizId, { finished: false, attemptsUsed: 0 });
+    }
+  }
+
+  return info;
+}
+
+/**
  * Extended QuizModule with courseId for API responses.
  */
 export interface QuizModuleWithCourse extends QuizModule {
@@ -1213,15 +1280,197 @@ export async function getQuizzesByCoursesApi(
     { courseids: courseIds }
   );
 
-  return (data?.quizzes ?? []).map((q: any) => ({
-    cmid: q.coursemodule.toString(),
-    name: q.name,
-    url: q.viewurl,
-    isComplete: false, // API doesn't provide completion status
-    timeOpen: q.timeopen,
-    timeClose: q.timeclose,
-    courseId: q.course,
-  }));
+
+  const quizzes = (data?.quizzes ?? []) as any[];
+
+  // Fetch user attempts to determine completion status and left attempts
+  const quizIds = quizzes.map(q => q.id);
+  const attemptInfo = await getUserQuizAttemptInfo(session, quizIds);
+
+  return quizzes.map(q => {
+    const info = attemptInfo.get(q.id);
+    return {
+      quizid: q.id.toString(),
+      name: q.name,
+      url: q.viewurl,
+      intro: q.intro,
+      isComplete: info?.finished ?? false,
+      attemptsUsed: info?.attemptsUsed ?? 0,
+      timeClose: q.timeclose,
+      maxAttempts: q.attempts,
+      courseId: q.course,
+    };
+  });
+}
+
+/**
+ * Start a new quiz attempt via pure WS API.
+ */
+export async function startQuizAttemptApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  quizId: string,
+  options: { forcenew?: boolean; precheck?: boolean } = {}
+): Promise<QuizStartResult> {
+  const params: Record<string, unknown> = {
+    quizid: parseInt(quizId, 10),
+    forcenew: options.forcenew ? 1 : 0,
+  };
+
+  if (options.precheck) {
+    params.precheck = 1;
+  }
+
+  const data = await moodleApiCall<{
+    attempt?: unknown;
+    page?: number;
+    messages?: string[];
+  }>(session, "mod_quiz_start_attempt", params);
+
+  if (!data?.attempt) {
+    throw new Error("No attempt data returned");
+  }
+
+  const attempt = data.attempt as any;
+  const attemptId = attempt.id || attempt.attempt;
+  return {
+    attempt: {
+      attempt: attemptId,
+      attemptid: attemptId,
+      quizid: attempt.quizid,
+      userid: attempt.userid,
+      attemptnumber: attempt.attemptnumber,
+      state: attempt.state,
+      timestart: attempt.timestart,
+      timefinish: attempt.timefinish,
+      preview: attempt.preview === 1,
+    },
+    page: data.page,
+    messages: data.messages,
+  };
+}
+
+/**
+ * Get quiz attempt data including questions via pure WS API.
+ */
+export async function getQuizAttemptDataApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  attemptId: number,
+  page: number = 0
+): Promise<QuizAttemptData> {
+  const data = await moodleApiCall<{
+    attempt?: unknown;
+    questions?: Record<string, unknown>;
+    nextpage?: number;
+    prevpage?: number;
+  }>(session, "mod_quiz_get_attempt_data", { attemptid: attemptId, page });
+
+  if (!data?.attempt || !data?.questions) {
+    throw new Error("Invalid attempt data response");
+  }
+
+  const attempt = data.attempt as any;
+  const attemptIdValue = attempt.id || attempt.attempt;
+  const questions: Record<number, QuizQuestion> = {};
+
+  for (const [slot, question] of Object.entries(data.questions)) {
+    questions[parseInt(slot, 10)] = {
+      slot: (question as any).slot,
+      type: (question as any).type,
+      id: (question as any).id,
+      maxmark: (question as any).maxmark,
+      page: (question as any).page,
+      quizid: (question as any).quizid,
+      html: (question as any).html,
+      status: (question as any).status,
+      stateclass: (question as any).stateclass,
+      sequencecheck: (question as any).sequencecheck,
+      questionnumber: (question as any).questionnumber,
+    } as QuizQuestion;
+  }
+
+  return {
+    attempt: {
+      attempt: attemptIdValue,
+      attemptid: attemptIdValue,
+      uniqueid: attempt.uniqueid,
+      quizid: attempt.quizid,
+      userid: attempt.userid,
+      attemptnumber: attempt.attemptnumber,
+      state: attempt.state,
+      timestart: attempt.timestart,
+      timefinish: attempt.timefinish,
+    },
+    questions,
+    nextpage: data.nextpage,
+    prevpage: data.prevpage,
+  };
+}
+
+/**
+ * Process (save answers / finish) a quiz attempt via WS API.
+ *
+ * Answer formats:
+ * - Single choice (multichoice): { slot, answer: "0" }
+ * - Multiple choice (multichoices): { slot, answer: "0,2,3" } (comma-separated choice indices)
+ * - Short answer (shortanswer): { slot, answer: "text answer" }
+ *
+ * @param session - WS session
+ * @param attemptId - The attempt ID
+ * @param uniqueId - The usage attempt uniqueid (from attempt data)
+ * @param answers - Array of { slot, answer } pairs
+ * @param sequenceChecks - Map of slot -> sequencecheck value (required for deferredfeedback)
+ * @param finish - Whether to finish the attempt after saving
+ */
+export async function processQuizAttemptApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  attemptId: number,
+  uniqueId: number,
+  answers: Array<{ slot: number; answer: string }>,
+  sequenceChecks: Map<number, number>,
+  finish: boolean = true
+): Promise<{ state: string; warnings?: unknown[] }> {
+  const params: Record<string, unknown> = {
+    attemptid: attemptId,
+    finishattempt: finish ? 1 : 0,
+  };
+
+  let i = 0;
+  for (const a of answers) {
+    // Include sequencecheck first (required for deferredfeedback quizzes)
+    const seq = sequenceChecks.get(a.slot);
+    if (seq !== undefined) {
+      params[`data[${i}][name]`] = `q${uniqueId}:${a.slot}_:sequencecheck`;
+      params[`data[${i}][value]`] = seq.toString();
+      i++;
+    }
+
+    // Detect answer format:
+    // Comma-separated numeric values = multichoices (checkboxes)
+    // Single numeric value = multichoice (radio)
+    // Non-numeric text = shortanswer
+    if (/^\d+(,\d+)*$/.test(a.answer) && a.answer.includes(",")) {
+      // Multichoices: send each choice as qXXX:Y_choiceN with value 1
+      const choices = a.answer.split(",");
+      for (const choice of choices) {
+        params[`data[${i}][name]`] = `q${uniqueId}:${a.slot}_choice${choice}`;
+        params[`data[${i}][value]`] = "1";
+        i++;
+      }
+    } else {
+      // Single choice or shortanswer: send as qXXX:Y_answer
+      params[`data[${i}][name]`] = `q${uniqueId}:${a.slot}_answer`;
+      params[`data[${i}][value]`] = a.answer;
+      i++;
+    }
+  }
+
+  const data = await moodleApiCall<{ state?: string; warnings?: unknown[] }>(
+    session,
+    "mod_quiz_process_attempt",
+    params
+  );
+
+  return { state: data?.state ?? "unknown", warnings: data?.warnings };
 }
 
 // ── Materials via WS API ──────────────────────────────────────────────────────

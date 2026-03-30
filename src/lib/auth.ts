@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import type { AppConfig, Logger } from "./types.ts";
+import type { AppConfig, Logger, OutputFormat } from "./types.ts";
 import { acquireWsToken, loadWsToken, saveWsToken } from "./token.ts";
 
 /**
@@ -107,6 +107,9 @@ export async function launchAuthenticated(
  * Safely close browser and context with timeout.
  * Designed for AI agent usage - no human interaction needed.
  * If noWait is true, initiates cleanup but doesn't wait for completion.
+ *
+ * Note: Closes sequentially (context first, then browser) to avoid libuv
+ * assertion failures on Windows when handles are closed concurrently.
  */
 export async function closeBrowserSafely(
   browser: Browser,
@@ -116,7 +119,7 @@ export async function closeBrowserSafely(
 ): Promise<void> {
   const closePromises: Promise<void>[] = [];
 
-  // Close context with error handling
+  // Close context first with error handling
   if (context) {
     closePromises.push(
       Promise.race([
@@ -126,7 +129,7 @@ export async function closeBrowserSafely(
     );
   }
 
-  // Close browser with error handling
+  // Close browser after context with error handling
   closePromises.push(
     Promise.race([
       browser.close().catch(() => {}),
@@ -140,7 +143,10 @@ export async function closeBrowserSafely(
     return;
   }
 
-  await Promise.allSettled(closePromises);
+  // Wait sequentially to avoid libuv issues on Windows
+  for (const promise of closePromises) {
+    await promise.catch(() => {});
+  }
 }
 
 /**
@@ -255,4 +261,42 @@ async function login(
   }
 
   log.success("Login completed successfully.");
+}
+
+/**
+ * Create API context for WS token operations (no browser required).
+ * Returns null if session is invalid or WS token is missing.
+ */
+export async function createApiContext(
+  options: { verbose?: boolean; headed?: boolean },
+  command?: { optsWithGlobals(): { output?: OutputFormat; verbose?: boolean } }
+): Promise<{
+  log: Logger;
+  session: { wsToken: string; moodleBaseUrl: string };
+} | null> {
+  const { createLogger } = await import("./logger.ts");
+  const { loadWsToken } = await import("./token.ts");
+  const { getOutputFormat, getSessionPath } = await import("./utils.ts");
+
+  const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
+  const outputFormat = command ? getOutputFormat(command) : "json";
+  const silent = outputFormat === "json" && !opts.verbose;
+  const log = createLogger(opts.verbose, silent);
+
+  const sessionPath = getSessionPath();
+
+  // Try to load WS token
+  const wsToken = loadWsToken(sessionPath);
+  if (!wsToken) {
+    log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
+    return null;
+  }
+
+  return {
+    log,
+    session: {
+      wsToken,
+      moodleBaseUrl: "https://ilearning.cycu.edu.tw",
+    },
+  };
 }

@@ -8,7 +8,7 @@
 ## 功能特色
 - 📚 **課程資訊**：列出修課清單、成績、課程大綱與進度。
 - 📺 **影片輔助**：列出/下載影片，甚至自動標記為已觀看。
-- 📝 **測驗與教材**：快速查看測驗、下載教材。
+- 📝 **測驗與教材**：快速進行測驗、下載教材。
 - 💬 **討論區與公告**：閱讀公告、討論區、發表回覆。
 - 📅 **行事曆**：內建行事曆事件查詢與匯出。
 - ✅ **作業繳交**：查詢作業、檢查繳交狀態、上傳檔案並繳交。
@@ -61,10 +61,14 @@ openape videos download <id>         # 下載影片
 ```bash
 openape quizzes list <course-id>     # 列出特定課程測驗
 openape quizzes list-all             # 列出所有課程測驗
-openape quizzes open <id>            # 開啟特定測驗
+openape quizzes start <quiz-id>      # 開始測驗
+openape quizzes info <attempt-id>    # 查看測驗題目
+openape quizzes save <attempt-id> '<answers>' # 儲存測驗答案
 openape materials list-all           # 列出所有可下載教材
 openape materials download <id>      # 下載指定教材
 openape materials download-all       # 批次下載教材
+openape materials complete <id>      # 標記教材為已完成
+openape materials complete-all       # 批次標記教材為已完成
 ```
 
 ### 成績與其他查詢 (Grades, Forums, Calendar)
@@ -77,6 +81,7 @@ openape forums discussions <forum-id>      # 列出討論區中的討論串
 openape forums posts <discussion-id>       # 列出討論串中的貼文
 openape forums reply <post-id> <subject> <message>  # 回覆貼文
 openape forums post <forum-id> <subject> <message>  # 發起新討論
+openape forums delete <post-id>      # 刪除討論貼文
 openape announcements list-all       # 列出所有公告
 openape announcements read <id>      # 閱讀特定公告
 openape calendar events              # 查詢行事曆事件
@@ -101,7 +106,6 @@ openape upload file <path>                 # 上傳檔案取得 draft ID
 ### Skills
 讓你的 AI Agent 也可以控制 OpenApe。只需一個指令即可安裝：
 ```bash
-openape skills list                  # 查看目前提供的所有 skills
 openape skills install claude        # 為 Claude Code 安裝技能 (支援 claude, codex, opencode)
 openape skills install --all         # 自動偵測環境並安裝給所有支援的 Agent
 ```

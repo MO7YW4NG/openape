@@ -379,7 +379,7 @@ export function registerVideosCommand(program: Command): void {
         const failed = downloaded.filter(d => !d.success).length;
         log.info(`\n執行結果: ${completed} 成功, ${failed} 失敗`);
 
-        const output = {
+        console.log(JSON.stringify({
           status: "success",
           timestamp: new Date().toISOString(),
           course_id: courseId,
@@ -387,9 +387,10 @@ export function registerVideosCommand(program: Command): void {
           total_videos: videos.length,
           downloaded: completed,
           failed,
-          videos: downloaded,
-        };
-        console.log(JSON.stringify(output));
+        }));
+        for (const v of downloaded) {
+          console.log(JSON.stringify(v));
+        }
       } finally {
         await closeBrowserSafely(browser, browserContext);
       }

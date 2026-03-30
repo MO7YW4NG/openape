@@ -1,4 +1,4 @@
-import { getBaseDir } from "../lib/utils.ts";
+import { getBaseDir, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi, getCalendarEventsApi } from "../lib/moodle.ts";
@@ -109,29 +109,28 @@ export function registerCalendarCommand(program: Command): void {
         filteredEvents = allEvents.filter(e => e.timestart > now);
       }
 
-      const output = {
+      console.log(JSON.stringify({
         status: "success",
         timestamp: new Date().toISOString(),
-        events: filteredEvents.map(e => ({
+        total_events: allEvents.length,
+        upcoming: allEvents.filter(e => e.timestart > now).length,
+        by_type: allEvents.reduce((acc, e) => {
+          acc[e.eventtype] = (acc[e.eventtype] || 0) + 1;
+          return acc;
+        }, {} as Record<string, number>),
+      }));
+      for (const e of filteredEvents) {
+        console.log(JSON.stringify({
           id: e.id,
           name: e.name,
           description: e.description,
           course_id: e.courseid,
           event_type: e.eventtype,
-          start_time: new Date(e.timestart).toISOString(),
-          end_time: e.timeduration ? new Date(e.timestart + e.timeduration / 1000).toISOString() : null,
+          start_time: formatTimestamp(e.timestart),
+          end_time: e.timeduration ? formatTimestamp(e.timestart + Math.floor(e.timeduration / 1000)) : null,
           location: e.location,
-        })),
-        summary: {
-          total_events: allEvents.length,
-          upcoming: allEvents.filter(e => e.timestart > now).length,
-          by_type: allEvents.reduce((acc, e) => {
-            acc[e.eventtype] = (acc[e.eventtype] || 0) + 1;
-            return acc;
-          }, {} as Record<string, number>),
-        },
-      };
-      console.log(JSON.stringify(output));
+        }));
+      }
     });
 
   calendarCmd
@@ -185,8 +184,8 @@ export function registerCalendarCommand(program: Command): void {
           description: e.description,
           course_id: e.courseid,
           event_type: e.eventtype,
-          start_time: new Date(e.timestart).toISOString(),
-          end_time: e.timeduration ? new Date(e.timestart + e.timeduration / 1000).toISOString() : null,
+          start_time: formatTimestamp(e.timestart),
+          end_time: e.timeduration ? formatTimestamp(e.timestart + Math.floor(e.timeduration / 1000)) : null,
           location: e.location,
         })),
         summary: {

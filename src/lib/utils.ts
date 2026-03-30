@@ -1,4 +1,4 @@
-import { dirname } from "node:path";
+import { dirname, resolve } from "node:path";
 import type { OutputFormat } from "./types.ts";
 
 /**
@@ -82,4 +82,51 @@ export function sanitizeFilename(name: string, maxLength: number = 200): string 
     .replace(/[<>:"/\\|?*]/g, "_")
     .replace(/\s+/g, "_")
     .substring(0, maxLength);
+}
+
+/**
+ * Get the session storage file path.
+ */
+export function getSessionPath(): string {
+  const baseDir = getBaseDir();
+  return resolve(baseDir, ".auth", "storage-state.json");
+}
+
+/**
+ * Format file size to KB with specified decimal places.
+ */
+export function formatFileSize(bytes: number, decimals: number = 2): string {
+  return (bytes / 1024).toFixed(decimals);
+}
+
+/**
+ * Format Moodle timestamp to localized string.
+ */
+export function formatMoodleDate(timestamp?: number): string {
+  if (!timestamp || timestamp === 0) return "無期限";
+  return new Date(timestamp * 1000).toLocaleString("zh-TW");
+}
+
+/**
+ * 統一時間戳記轉換 (預設：本地時間字串)
+ */
+export function formatTimestamp(timestamp: number | undefined | null, format: "iso" | "local" | "relative" = "local"): string {
+  if (!timestamp || timestamp === 0) return "無期限";
+
+  const date = new Date(timestamp * 1000);
+
+  if (format === "iso") return date.toISOString();
+  if (format === "relative") return formatRelativeTime(timestamp);
+  return date.toLocaleString("zh-TW");
+}
+
+/**
+ * 相對時間格式 (e.g., "2 hours ago")
+ */
+export function formatRelativeTime(timestamp: number): string {
+  const seconds = Math.floor(Date.now() / 1000) - timestamp;
+  if (seconds < 60) return `${seconds} seconds ago`;
+  if (seconds < 3600) return `${Math.floor(seconds / 60)} minutes ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)} hours ago`;
+  return `${Math.floor(seconds / 86400)} days ago`;
 }

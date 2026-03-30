@@ -1,4 +1,4 @@
-import { getBaseDir, stripHtmlTags } from "../lib/utils.ts";
+import { getBaseDir, stripHtmlTags, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi } from "../lib/moodle.ts";
@@ -136,8 +136,8 @@ export function registerCoursesCommand(program: Command): void {
         courseId: course.id,
         courseName: course.fullname,
         progress: course.progress ?? 0,
-        startDate: course.startdate ? new Date(course.startdate * 1000).toISOString() : null,
-        endDate: course.enddate ? new Date(course.enddate * 1000).toISOString() : null,
+        startDate: course.startdate ? formatTimestamp(course.startdate) : null,
+        endDate: course.enddate ? formatTimestamp(course.enddate) : null,
       };
 
       formatAndOutput(progressData as unknown as Record<string, unknown>, output, apiContext.log);

@@ -1,15 +1,59 @@
-import { getBaseDir } from "../lib/utils.ts";
+import { getBaseDir, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
-import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCoursesApi, getQuizzesByCoursesApi } from "../lib/moodle.ts";
+import type { Logger, OutputFormat } from "../lib/types.ts";
+import {
+  getEnrolledCoursesApi,
+  getQuizzesByCoursesApi,
+  startQuizAttemptApi,
+  getQuizAttemptDataApi,
+  processQuizAttemptApi
+} from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
-import { launchAuthenticated } from "../lib/auth.ts";
-import { extractSessionInfo } from "../lib/session.ts";
-import { closeBrowserSafely } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
 import { loadWsToken } from "../lib/token.ts";
 import path from "node:path";
 import fs from "node:fs";
+
+function stripHtmlKeepLines(html: string): string {
+  return html
+    .replace(/<br\s*\/?>/gi, "\n")
+    .replace(/<\/p>/gi, "\n")
+    .replace(/<[^>]+>/g, "")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function parseQuestionHtml(html: string): { text: string; options: string[] } {
+  const qtextMatch = html.match(/<div class="qtext">([\s\S]*?)<\/div>\s*<\/div>/);
+  const text = stripHtmlKeepLines(qtextMatch?.[1] ?? "");
+
+  const options: string[] = [];
+  const optionRegex = /data-region="answer-label">([\s\S]*?)<\/div>\s*<\/div>/g;
+  let match;
+  while ((match = optionRegex.exec(html)) !== null) {
+    options.push(stripHtmlKeepLines(match[1]));
+  }
+
+  return { text, options };
+}
+
+function parseSavedAnswer(html: string): string | string[] | null {
+  const radioChecked = html.match(/<input type="radio"[^>]*value="(\d+)"[^>]*checked="checked"/);
+  if (radioChecked && radioChecked[1] !== "-1") return radioChecked[1];
+
+  const checkboxChecked = [...html.matchAll(/<input type="checkbox"[^>]*name="[^"]*choice(\d+)"[^>]*checked="checked"/g)];
+  if (checkboxChecked.length > 0) return checkboxChecked.map(m => m[1]);
+
+  // Match <input> with both name="*_answer" and type="text" in any attribute order
+  const textMatch = html.match(/<input[^>]*(?:name="[^"]*:_answer"|type="text")[^>]*(?:name="[^"]*:_answer"|type="text")[^>]*value="([^"]*)"/);
+  if (textMatch && textMatch[1] !== "") return textMatch[1];
+
+  return null;
+}
 
 export function registerQuizzesCommand(program: Command): void {
   const quizzesCmd = program.command("quizzes");
@@ -56,56 +100,11 @@ export function registerQuizzesCommand(program: Command): void {
     };
   }
 
-  // Helper function to create session context (for open command only)
-  async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
-    log: Logger;
-    page: import("playwright-core").Page;
-    session: SessionInfo;
-    browser: any;
-    context: any;
-  } | null> {
-    const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
-    const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent);
-
-    const baseDir = getBaseDir();
-    const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
-
-    if (!fs.existsSync(sessionPath)) {
-      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
-      return null;
-    }
-
-    const config = {
-      username: "",
-      password: "",
-      courseUrl: "",
-      moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-      headless: !options.headed,
-      slowMo: 0,
-      authStatePath: sessionPath,
-      ollamaBaseUrl: "",
-    };
-
-    log.info("啟動瀏覽器...");
-    const { browser, context, page } = await launchAuthenticated(config, log);
-
-    try {
-      const session = await extractSessionInfo(page, config, log);
-      return { log, page, session, browser, context };
-    } catch (err) {
-      await context.close();
-      await browser.close();
-      throw err;
-    }
-  }
-
   quizzesCmd
     .command("list")
-    .description("List quizzes in a course")
+    .description("List incomplete quizzes in a course")
     .argument("<course-id>", "Course ID")
-    .option("--available-only", "Show only available quizzes")
+    .option("--all", "Include completed quizzes")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (courseId, options, command) => {
       const output: OutputFormat = getOutputFormat(command);
@@ -117,18 +116,22 @@ export function registerQuizzesCommand(program: Command): void {
 
       const quizzes = await getQuizzesByCoursesApi(apiContext.session, [parseInt(courseId, 10)]);
 
-      // Note: API doesn't provide completion status, so --available-only shows all
-      if (options.availableOnly) {
-        apiContext.log.warn("--available-only is not supported in API mode, showing all quizzes");
-      }
+      // Default: only show incomplete quizzes
+      const filtered = options.all ? quizzes : quizzes.filter(q => !q.isComplete);
 
-      formatAndOutput(quizzes as unknown as Record<string, unknown>[], output, apiContext.log);
+      const formattedQuizzes = filtered.map(({ courseId, ...q }) => ({
+        ...q,
+        timeClose: q.timeClose ? formatTimestamp(q.timeClose) : null,
+      }));
+
+      formatAndOutput(formattedQuizzes as unknown as Record<string, unknown>[], output, apiContext.log);
     });
 
   quizzesCmd
     .command("list-all")
-    .description("List all available quizzes across all courses")
+    .description("List all incomplete quizzes across all courses")
     .option("--level <type>", "Course level: in_progress (default) | all", "in_progress")
+    .option("--all", "Include completed quizzes")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
       const output: OutputFormat = getOutputFormat(command);
@@ -150,16 +153,20 @@ export function registerQuizzesCommand(program: Command): void {
       // Build a map of courseId -> course for quick lookup
       const courseMap = new Map(courses.map(c => [c.id, c]));
 
-      const allQuizzes: Array<{ courseName: string; name: string; url: string; cmid: string; isComplete: boolean }> = [];
+      const allQuizzes: Array<{ courseName: string; courseId: number; name: string; url: string; quizid: string; isComplete: boolean; attemptsUsed: number; maxAttempts: number; timeClose: string | null }> = [];
       for (const q of apiQuizzes) {
         const course = courseMap.get(q.courseId);
-        if (course) {
+        if (course && (options.all || !q.isComplete)) {
           allQuizzes.push({
             courseName: course.fullname,
+            courseId: q.courseId,
             name: q.name,
             url: q.url,
-            cmid: q.cmid,
+            quizid: q.quizid,
             isComplete: q.isComplete,
+            attemptsUsed: q.attemptsUsed,
+            maxAttempts: q.maxAttempts,
+            timeClose: q.timeClose ? formatTimestamp(q.timeClose) : null,
           });
         }
       }
@@ -169,29 +176,149 @@ export function registerQuizzesCommand(program: Command): void {
     });
 
   quizzesCmd
-    .command("open")
-    .description("Open a quiz URL in browser (manual mode)")
-    .argument("<quiz-url>", "Quiz URL")
-    .option("--headed", "Run browser in visible mode (default: true)")
-    .action(async (quizUrl, options, command) => {
-      const context = await createSessionContext({ ...options, headed: true }, command);
-      if (!context) {
+    .command("start")
+    .description("Start a new quiz attempt")
+    .argument("<quiz-id>", "Quiz ID")
+    .option("--output <format>", "Output format: json|csv|table|silent")
+    .action(async (quizCmid, options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, browser, context: browserContext } = context;
+      try {
+        const result = await startQuizAttemptApi(
+          apiContext.session,
+          quizCmid,
+        );
+
+        const outputData = [{
+          attemptId: result.attempt.attemptid,
+          quizId: result.attempt.quizid,
+          state: result.attempt.state,
+          timeStart: formatTimestamp(result.attempt.timestart),
+          timeFinish: result.attempt.timefinish
+            ? formatTimestamp(result.attempt.timefinish)
+            : null,
+          isPreview: result.attempt.preview,
+        }];
+
+        apiContext.log.success(`Quiz attempt ${result.attempt.attemptid} started.`);
+        formatAndOutput(outputData as unknown as Record<string, unknown>[], output, apiContext.log);
+      } catch (error) {
+        apiContext.log.error(`Failed to start quiz attempt: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+      }
+    });
+
+  quizzesCmd
+    .command("info")
+    .description("Get quiz attempt data and questions")
+    .argument("<attempt-id>", "Quiz attempt ID")
+    .option("--page <number>", "Page number", "0")
+    .option("--output <format>", "Output format: json|csv|table|silent")
+    .action(async (attemptId, options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
 
       try {
-        log.info(`導航至測驗頁面: ${quizUrl}`);
-        await page.goto(quizUrl, { waitUntil: "domcontentloaded" });
+        const data = await getQuizAttemptDataApi(
+          apiContext.session,
+          parseInt(attemptId),
+          parseInt(options.page)
+        );
 
-        log.info("瀏覽器已開啟，請手動完成測驗。");
-        log.info("按 Ctrl+C 關閉瀏覽器。");
+        const questions = Object.values(data.questions).map((q: any) => {
+          const parsed = parseQuestionHtml(q.html ?? "");
+          const savedAnswer = parseSavedAnswer(q.html ?? "");
+          return {
+            number: q.questionnumber ?? q.slot,
+            type: q.type,
+            status: q.status,
+            stateclass: q.stateclass,
+            savedAnswer,
+            question: parsed.text,
+            options: parsed.options,
+          };
+        });
 
-        await new Promise(() => {});
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
+        const outputData = [{
+          attemptId: data.attempt.attemptid,
+          quizId: data.attempt.quizid,
+          state: data.attempt.state,
+          totalQuestions: questions.length,
+          questions,
+        }];
+
+        apiContext.log.success(`Retrieved attempt ${data.attempt.attemptid}`);
+        formatAndOutput(outputData as unknown as Record<string, unknown>[], output, apiContext.log);
+      } catch (error) {
+        apiContext.log.error(`Failed to get attempt data: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
+      }
+    });
+
+  quizzesCmd
+    .command("save")
+    .description("Save answers for a quiz attempt")
+    .argument("<attempt-id>", "Quiz attempt ID")
+    .argument("<answers>", "Answers JSON: [{slot:1,answer:\"0\"}]  multichoice=number, multichoices=\"0,2\", shortanswer=\"text\"")
+    .option("--submit", "Submit the attempt after saving")
+    .option("--output <format>", "Output format: json|csv|table|silent")
+    .action(async (attemptId: string, answersJson: string, options: any, command: any) => {
+      const output: OutputFormat = getOutputFormat(command);
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
+        process.exitCode = 1;
+        return;
+      }
+
+      let answers: Array<{ slot: number; answer: string }>;
+      try {
+        answers = JSON.parse(answersJson);
+      } catch {
+        apiContext.log.error("Invalid answers JSON. Expected format: [{\"slot\":1,\"answer\":\"0\"},...]");
+        process.exitCode = 1;
+        return;
+      }
+
+      try {
+        // Get attempt data to find uniqueid and sequencecheck values
+        const attemptData = await getQuizAttemptDataApi(
+          apiContext.session,
+          parseInt(attemptId),
+          0
+        );
+
+        const uniqueId = attemptData.attempt.uniqueid ?? attemptData.attempt.attemptid;
+
+        const sequenceChecks = new Map<number, number>();
+        for (const q of Object.values(attemptData.questions)) {
+          if (q.sequencecheck !== undefined) {
+            sequenceChecks.set(q.slot, q.sequencecheck);
+          }
+        }
+
+        const result = await processQuizAttemptApi(
+          apiContext.session,
+          parseInt(attemptId),
+          uniqueId,
+          answers,
+          sequenceChecks,
+          !!options.submit
+        );
+
+        apiContext.log.success(`Attempt ${attemptId} state: ${result.state}`);
+        formatAndOutput([result] as unknown as Record<string, unknown>[], output, apiContext.log);
+      } catch (error) {
+        apiContext.log.error(`Failed to submit attempt: ${error instanceof Error ? error.message : String(error)}`);
+        process.exitCode = 1;
       }
     });
 }

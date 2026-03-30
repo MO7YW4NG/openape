@@ -121,7 +121,13 @@ export function formatAndOutput<T extends Record<string, unknown>>(
   log: Logger
 ): void {
   if (format === "json") {
-    console.log(JSON.stringify(data));
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        console.log(JSON.stringify(item));
+      }
+    } else {
+      console.log(JSON.stringify(data));
+    }
     // Exit immediately for AI agent - no need to wait for browser cleanup
     process.exit(0);
   } else if (format === "csv") {

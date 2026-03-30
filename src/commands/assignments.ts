@@ -1,58 +1,15 @@
-import { getBaseDir } from "../lib/utils.ts";
+import { getOutputFormat, getSessionPath, formatFileSize, formatMoodleDate } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi, getAssignmentsByCoursesApi, getSubmissionStatusApi, saveSubmissionApi, uploadFileApi } from "../lib/moodle.ts";
-import { createLogger } from "../lib/logger.ts";
-import { loadWsToken } from "../lib/token.ts";
+import { createApiContext } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
 import path from "node:path";
-import fs from "node:fs";
-import readline from "node:readline";
+import fs from "node:fs/promises";
 
 export function registerAssignmentsCommand(program: Command): void {
   const assignmentsCmd = program.command("assignments");
   assignmentsCmd.description("Assignment operations");
-
-  function getOutputFormat(command: any): OutputFormat {
-    const opts = command.optsWithGlobals();
-    return (opts.output as OutputFormat) || "json";
-  }
-
-  // Pure API context - no browser required (fast!)
-  async function createApiContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
-    log: Logger;
-    session: { wsToken: string; moodleBaseUrl: string };
-  } | null> {
-    const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
-    const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent);
-
-    const baseDir = getBaseDir();
-    const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
-
-    // Check if session exists
-    if (!fs.existsSync(sessionPath)) {
-      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
-      log.info(`Session 預期位置: ${sessionPath}`);
-      return null;
-    }
-
-    // Try to load WS token
-    const wsToken = loadWsToken(sessionPath);
-    if (!wsToken) {
-      log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
-      return null;
-    }
-
-    return {
-      log,
-      session: {
-        wsToken,
-        moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-      },
-    };
-  }
 
   assignmentsCmd
     .command("list")
@@ -69,21 +26,15 @@ export function registerAssignmentsCommand(program: Command): void {
 
       const apiAssignments = await getAssignmentsByCoursesApi(apiContext.session, [parseInt(courseId, 10)]);
 
-      // Helper to format timestamp
-      const formatDate = (timestamp?: number): string => {
-        if (!timestamp || timestamp === 0) return "無期限";
-        return new Date(timestamp * 1000).toLocaleString("zh-TW");
-      };
-
       const assignments = apiAssignments.map(a => ({
         id: a.id,
         courseName: courseId,
         name: a.name,
         url: a.url,
         cmid: a.cmid,
-        duedate: formatDate(a.duedate),
-        cutoffdate: formatDate(a.cutoffdate),
-        allowSubmissionsFromDate: formatDate(a.allowSubmissionsFromDate),
+        duedate: formatMoodleDate(a.duedate),
+        cutoffdate: formatMoodleDate(a.cutoffdate),
+        allowSubmissionsFromDate: formatMoodleDate(a.allowSubmissionsFromDate),
       }));
 
       apiContext.log.info(`\n找到 ${assignments.length} 個作業。`);
@@ -115,12 +66,6 @@ export function registerAssignmentsCommand(program: Command): void {
       // Build a map of courseId -> course for quick lookup
       const courseMap = new Map(courses.map(c => [c.id, c]));
 
-      // Helper to format timestamp
-      const formatDate = (timestamp?: number): string => {
-        if (!timestamp || timestamp === 0) return "無期限";
-        return new Date(timestamp * 1000).toLocaleString("zh-TW");
-      };
-
       const allAssignments: Array<{
         id: number;
         courseName: string;
@@ -140,9 +85,9 @@ export function registerAssignmentsCommand(program: Command): void {
             name: a.name,
             url: a.url,
             cmid: a.cmid,
-            duedate: formatDate(a.duedate),
-            cutoffdate: formatDate(a.cutoffdate),
-            allowSubmissionsFromDate: formatDate(a.allowSubmissionsFromDate),
+            duedate: formatMoodleDate(a.duedate),
+            cutoffdate: formatMoodleDate(a.cutoffdate),
+            allowSubmissionsFromDate: formatMoodleDate(a.allowSubmissionsFromDate),
           });
         }
       }
@@ -185,7 +130,7 @@ export function registerAssignmentsCommand(program: Command): void {
         files: status.extensions.map(f => ({
           filename: f.filename,
           filesize: f.filesize,
-          filesize_kb: (f.filesize / 1024).toFixed(2),
+          filesize_kb: formatFileSize(f.filesize),
         })),
       };
 
@@ -253,7 +198,9 @@ export function registerAssignmentsCommand(program: Command): void {
         const resolvedPath = path.resolve(options.file);
 
         // Check if file exists
-        if (!fs.existsSync(resolvedPath)) {
+        try {
+          await fs.access(resolvedPath);
+        } catch {
           const errorResult = {
             success: false,
             error: `檔案不存在: ${options.file}`,
@@ -263,8 +210,8 @@ export function registerAssignmentsCommand(program: Command): void {
           return;
         }
 
-        const stats = fs.statSync(resolvedPath);
-        const fileSizeKB = (stats.size / 1024).toFixed(2);
+        const stats = await fs.stat(resolvedPath);
+        const fileSizeKB = formatFileSize(stats.size);
 
         const uploadResult = await uploadFileApi(apiContext.session, resolvedPath);
 
@@ -282,7 +229,7 @@ export function registerAssignmentsCommand(program: Command): void {
         fileUploaded = {
           filename: path.basename(resolvedPath),
           filesize: stats.size,
-          filesize_kb: fileSizeKB,
+          filesize_kb: formatFileSize(stats.size),
           draft_id: fileId as number,
         };
       }
