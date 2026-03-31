@@ -493,7 +493,6 @@ export async function addForumDiscussionApi(
         forumid: forumId,
         subject,
         message: message.replace(/\n/g, "<br>"),
-        messageformat: 1,
       }
     );
 
