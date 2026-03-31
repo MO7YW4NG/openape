@@ -1717,7 +1717,7 @@ export async function uploadFileApi(
     // Prepare multipart form data
     const formData = new FormData();
     formData.append("token", session.wsToken);
-    formData.append("file", new Blob([fileContent]), fileName);
+    formData.append("file", new Blob([new Uint8Array(fileContent)]), fileName);
     formData.append("filepath", options?.filepath || "/");
     formData.append("itemid", String(draftItemId)); // Use our generated draft ID
     formData.append("contextid", String(userContextId)); // Use calculated user context
