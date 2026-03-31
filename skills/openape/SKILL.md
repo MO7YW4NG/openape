@@ -1,146 +1,113 @@
 ---
 name: openape
-description: How to use OpenApe CLI — automate CYCU iLearning (Moodle) tasks including course management, video progress tracking, quizzes, materials, grades, forums, announcements, and calendar
+description: "CYCU iLearning (Moodle): Manage courses, videos, quizzes, materials, grades, forums, announcements, and calendar."
+metadata:
+  openclaw:
+    category: "education"
+    requires:
+      bins:
+        - openape
+    cliHelp: "openape --help"
 ---
 
-# OpenApe CLI
+# openape
 
-Use `openape` command to access CYCU iLearning (Moodle) platform.
-
-## Setup
+> **PREREQUISITE:** Install and login first:
+>
+> ```bash
+> npm install -g @mo7yw4ng/openape
+> openape login
+> ```
 
 ```bash
-# Install globally via npm
-npm install -g @mo7yw4ng/openape
-
-# Login (opens browser for Microsoft OAuth SSO)
-openape login
-
-# Check session status and user info
-openape status
+openape <command> [subcommand] [args] [flags]
 ```
 
 ## Commands
 
-### Courses
-```bash
-openape courses list [--level in_progress|past|future|all]
-openape courses info <course-id>
-openape courses progress <course-id>
-openape courses syllabus <course-id>
-```
+### courses — Course operations
 
-### Videos
-```bash
-openape videos list <course-id> [--incomplete-only]
-openape videos complete <course-id>
-openape videos complete-all [--dry-run]
-openape videos download <course-id> [--output-dir ./downloads/videos]
-```
+  - `list` — List enrolled courses. Flags: `--level in_progress|past|future|all`
+  - `info <course-id>` — Show detailed course information
+  - `progress <course-id>` — Show course completion progress
+  - `syllabus <course-id>` — Show course syllabus (from CMAP)
 
-### Quizzes
-```bash
-openape quizzes list <course-id>
-openape quizzes list-all [--level in_progress|all]
-openape quizzes start <quiz-id>
-openape quizzes info <attempt-id> [--page <number>]
-openape quizzes save <attempt-id> '<answers-json>'
-# answers-json example: '[{"slot":1,"answer":"0"}]'
-# multichoice: number, multichoices: "0,2", shortanswer: "text"
-```
+### videos — Video progress operations
 
-### Materials
-```bash
-openape materials list-all [--level in_progress|all]
-openape materials download <course-id>
-openape materials download-all [--output-dir ./downloads]
-openape materials complete <course-id>
-openape materials complete-all
-```
+  - `list <course-id>` — List videos in a course. Flags: `--incomplete-only`
+  - `complete <course-id>` — Complete all videos in a course
+  - `complete-all` — Complete all incomplete videos across all courses. Flags: `--dry-run`
+  - `download <course-id>` — Download videos from a course. Flags: `--output-dir <path>`
 
-### Assignments
-```bash
-openape assignments list <course-id>
-openape assignments list-all [--level in_progress|all]
-openape assignments status <assignment-id>
-openape assignments submit <assignment-id> [--text <content>] [--file-id <id>]
-```
+### quizzes — Quiz operations
 
-### Grades
-```bash
-openape grades summary
-openape grades course <course-id>
-```
+  - `list <course-id>` — List incomplete quizzes in a course
+  - `list-all` — List all incomplete quizzes across courses. Flags: `--level in_progress|all`
+  - `start <quiz-id>` — Start a new quiz attempt
+  - `info <attempt-id>` — Get quiz attempt data and questions. Flags: `--page <number>`
+  - `save <attempt-id> '<answers-json>'` — Save answers for a quiz attempt. JSON format: `[{"slot":1,"answer":"0"}]`. Multichoice: number, multichoices: `"0,2"`, shortanswer: text
 
-### Forums
-```bash
-openape forums list [--level in_progress|all]
-openape forums list-all
-openape forums discussions <forum-id>
-openape forums posts <discussion-id>
-openape forums post <forum-id> <subject> <message> [--subscribe] [--pin]
-openape forums reply <discussion-id> <subject> <message> [--parent-id <id>]
-openape forums delete <post-id>
-```
+### materials — Material/resource operations
 
-### Announcements
-```bash
-openape announcements list-all [--unread-only]
-openape announcements read <announcement-id>
-```
+  - `list-all` — List all materials across courses. Flags: `--level in_progress|all`
+  - `download <course-id>` — Download all materials from a course
+  - `download-all` — Download all materials from all courses. Flags: `--output-dir <path>`
+  - `complete <course-id>` — Mark all incomplete resources (non-video) as complete
+  - `complete-all` — Mark all incomplete resources across all in-progress courses
 
-### Calendar
-```bash
-openape calendar events [--course-id <id>] [--events-after <date>] [--events-before <date>]
-openape calendar export [--format json|ics] [--output <file>]
-```
+### assignments — Assignment operations
 
-### Upload
-```bash
-openape upload file <file-path>
-```
+  - `list <course-id>` — List assignments in a course
+  - `list-all` — List all assignments across courses. Flags: `--level in_progress|all`
+  - `status <assignment-id>` — Check assignment submission status
+  - `submit <assignment-id>` — Submit an assignment. Flags: `--text <content>`, `--file-id <id>`
 
-### Skills
-```bash
-openape skills install [claude|codex|opencode]
-openape skills show
-```
+### grades — Grade operations
+
+  - `summary` — Show grade summary across all courses
+  - `course <course-id>` — Show detailed grades for a course
+
+### forums — Forum operations
+
+  - `list` — List forums from in-progress courses. Flags: `--level in_progress|all`
+  - `list-all` — List all forums across all courses
+  - `discussions <forum-id>` — List discussions in a forum
+  - `posts <discussion-id>` — Show posts in a discussion
+  - `post <forum-id> <subject> <message>` — Post a new discussion. Flags: `--subscribe`, `--pin`
+  - `reply <post-id> <subject> <message>` — Reply to a discussion post. Flags: `--parent-id <id>`
+  - `delete <post-id>` — Delete a forum post or discussion
+
+### announcements — Announcement operations
+
+  - `list-all` — List all announcements across courses. Flags: `--unread-only`
+  - `read <announcement-id>` — Read a specific announcement (full content)
+
+### calendar — Calendar operations
+
+  - `events` — List calendar events. Flags: `--course-id <id>`, `--events-after <date>`, `--events-before <date>`
+  - `export` — Export calendar events to file. Flags: `--format json|ics`, `--output <file>`
+
+### upload — File upload
+
+  - `file <file-path>` — Upload a file to Moodle draft area
+
+### skills — Skill management
+
+  - `install [platform]` — Install OpenApe skill to an agent platform (claude, codex, opencode)
+  - `show` — Print the raw SKILL.md content
 
 ## Output Formats
 
-All commands support `--output` option:
-- `json` (default) - Machine-readable JSON
-- `csv` - Spreadsheet format
-- `table` - Human-readable tables
-- `silent` - Suppress output
+All commands support `--output`: `json` (default), `csv`, `table`, `silent`
 
-Global options: `--verbose`, `--headed`, `--session <path>`
+Global flags: `--verbose`, `--headed`, `--session <path>`
 
-## Quick Examples
+## Discovering Commands
 
 ```bash
-# Check daily progress
-openape courses list
-openape announcements list-all --unread-only
+# Browse all commands
+openape --help
 
-# Auto-complete videos
-openape videos complete-all --dry-run  # preview
-openape videos complete-all            # execute
-
-# Auto-complete materials
-openape materials complete-all
-
-# Download materials
-openape materials download-all --output-dir ./semester
-
-# Check grades
-openape grades summary
-
-# Post to forum
-openape forums post 26617 "簽到" "11144238 王敏權"
-
-# Take a quiz
-openape quizzes start 12345
-openape quizzes info 234210
-openape quizzes save 234210 '[{"slot":1,"answer":"0"}]'
+# Inspect a command's subcommands and options
+openape <command> --help
 ```
