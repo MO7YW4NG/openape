@@ -41,11 +41,11 @@ openape <command> [subcommand] [args] [flags]
 
 ### quizzes — Quiz operations
 
-  - `list <course-id>` — List incomplete quizzes in a course
+  - `list <course-id>` — List incomplete quizzes in a course. Flags: `--all`
   - `list-all` — List all incomplete quizzes across courses. Flags: `--level in_progress|all`
   - `start <quiz-id>` — Start a new quiz attempt
   - `info <attempt-id>` — Get quiz attempt data and questions. Flags: `--page <number>`
-  - `save <attempt-id> '<answers-json>'` — Save answers for a quiz attempt. JSON format: `[{"slot":1,"answer":"0"}]`. Multichoice: number, multichoices: `"0,2"`, shortanswer: text
+  - `save <attempt-id> '<answers-json>'` — Save answers for a quiz attempt. Flags: `--submit`. JSON format: `[{"slot":1,"answer":"0"}]`. Multichoice: number, multichoices: `"0,2"`, shortanswer: text
 
 ### materials — Material/resource operations
 
