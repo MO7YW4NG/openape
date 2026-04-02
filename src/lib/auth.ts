@@ -303,6 +303,7 @@ export async function createApiContext(
   const { createLogger } = await import("./logger.ts");
   const { loadWsToken } = await import("./token.ts");
   const { getOutputFormat, getSessionPath } = await import("./utils.ts");
+  const { existsSync } = await import("node:fs");
 
   const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
   const outputFormat = command ? getOutputFormat(command) : "json";
@@ -311,10 +312,14 @@ export async function createApiContext(
 
   const sessionPath = getSessionPath();
 
-  // Try to load WS token
+  if (!existsSync(sessionPath)) {
+    log.error("未找到登入 session。請先執行 'openape login' 進行登入。");
+    return null;
+  }
+
   const wsToken = loadWsToken(sessionPath);
   if (!wsToken) {
-    console.error("未找到 WS token。請先執行 'openape login' 進行登入。");
+    log.error("未找到 WS token。請先執行 'openape login' 進行登入。");
     return null;
   }
 

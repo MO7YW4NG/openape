@@ -1,11 +1,8 @@
-import { getBaseDir, stripHtmlTags, getOutputFormat, formatTimestamp } from "../lib/utils.ts";
+import { stripHtmlTags, getOutputFormat, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
-import type { Logger, OutputFormat } from "../lib/types.ts";
+import type { OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi, getForumsApi, getForumDiscussionsApi, getDiscussionPostsApi, addForumDiscussionApi, addForumPostApi, deleteForumPostApi } from "../lib/moodle.ts";
-import { createLogger } from "../lib/logger.ts";
-import { loadWsToken, loadSesskey } from "../lib/token.ts";
-import path from "node:path";
-import fs from "node:fs";
+import { createApiContext } from "../lib/auth.ts";
 
 interface ForumWithCourse {
   course_id: number;
@@ -21,46 +18,6 @@ interface ForumWithCourse {
 export function registerForumsCommand(program: Command): void {
   const forumsCmd = program.command("forums");
   forumsCmd.description("Forum operations");
-
-  // Pure API context - no browser required (fast!)
-  async function createApiContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
-    log: Logger;
-    session: { wsToken: string; moodleBaseUrl: string; sesskey?: string };
-  } | null> {
-    const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
-    const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent, outputFormat);
-
-    const baseDir = getBaseDir();
-    const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
-
-    // Check if session exists
-    if (!fs.existsSync(sessionPath)) {
-      console.error("未找到登入 session。請先執行 'openape login' 進行登入。");
-      log.info(`Session 預期位置: ${sessionPath}`);
-      return null;
-    }
-
-    // Try to load WS token
-    const wsToken = loadWsToken(sessionPath);
-    if (!wsToken) {
-      console.error("未找到 WS token。請先執行 'openape login' 進行登入。");
-      return null;
-    }
-
-    // Try to load sesskey from cache
-    const sesskey = loadSesskey(sessionPath) || undefined;
-
-    return {
-      log,
-      session: {
-        wsToken,
-        moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-        sesskey,
-      },
-    };
-  }
 
   forumsCmd
     .command("list")

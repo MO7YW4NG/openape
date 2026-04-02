@@ -1,56 +1,17 @@
-import { getBaseDir, getOutputFormat, shouldSilenceLogs, sanitizeFilename } from "../lib/utils.ts";
+import { getBaseDir, getOutputFormat, sanitizeFilename } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCourses, getEnrolledCoursesApi, getSupervideosInCourse, getSupervideosInCourseApi, getVideoMetadata, completeVideoApi, completeVideo, downloadVideo, getIncompleteVideosApi } from "../lib/moodle.ts";
+import { getEnrolledCoursesApi, getSupervideosInCourse, getSupervideosInCourseApi, getVideoMetadata, completeVideoApi, downloadVideo, getIncompleteVideosApi } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
-import { launchAuthenticated } from "../lib/auth.ts";
+import { createApiContext, launchAuthenticated, closeBrowserSafely } from "../lib/auth.ts";
 import { extractSessionInfo } from "../lib/session.ts";
-import { closeBrowserSafely } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
-import { loadWsToken } from "../lib/token.ts";
 import path from "node:path";
 import fs from "node:fs";
 
 export function registerVideosCommand(program: Command): void {
   const videosCmd = program.command("videos");
   videosCmd.description("Video progress operations");
-
-  // Pure API context - no browser required (fast!)
-  async function createApiContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
-    log: Logger;
-    session: { wsToken: string; moodleBaseUrl: string };
-  } | null> {
-    const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    // Don't silence logs for commands that don't have explicit output format control
-    const outputFormat = command && command.optsWithGlobals ? getOutputFormat(command) : "table";
-    const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent, outputFormat);
-
-    const baseDir = getBaseDir();
-    const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
-
-    // Check if session exists
-    if (!fs.existsSync(sessionPath)) {
-      console.error("未找到登入 session。請先執行 'openape login' 進行登入。");
-      log.info(`Session 預期位置: ${sessionPath}`);
-      return null;
-    }
-
-    // Try to load WS token
-    const wsToken = loadWsToken(sessionPath);
-    if (!wsToken) {
-      console.error("未找到 WS token。請先執行 'openape login' 進行登入。");
-      return null;
-    }
-
-    return {
-      log,
-      session: {
-        wsToken,
-        moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-      },
-    };
-  }
 
   // Helper function to create session context (for browser-only commands)
   async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
