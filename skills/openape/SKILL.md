@@ -47,6 +47,8 @@ openape <command> [subcommand] [args] [flags]
   - `info <attempt-id>` — Get quiz attempt data and questions. Flags: `--page <number>`
   - `save <attempt-id> '<answers-json>'` — Save answers for a quiz attempt. Flags: `--submit`. JSON format: `[{"slot":1,"answer":"0"}]`. Multichoice: number, multichoices: `"0,2"`, shortanswer: text
 
+> **NEVER SUBMIT WITHOUT USER'S PERMISSION**, you have to make sure answer is saved before submitting.
+
 ### materials — Material/resource operations
 
   - `list-all` — List all materials across courses. Flags: `--level in_progress|all`
