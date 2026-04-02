@@ -6,6 +6,7 @@ import {
   getQuizzesByCoursesApi,
   startQuizAttemptApi,
   getQuizAttemptDataApi,
+  getAllQuizAttemptDataApi,
   processQuizAttemptApi
 } from "../lib/moodle.ts";
 import { createLogger } from "../lib/logger.ts";
@@ -55,6 +56,22 @@ function parseSavedAnswer(html: string): string | string[] | null {
   return null;
 }
 
+function parseQuizQuestions(questions: Record<number, any>) {
+  return Object.values(questions).map((q: any) => {
+    const parsed = parseQuestionHtml(q.html ?? "");
+    const savedAnswer = parseSavedAnswer(q.html ?? "");
+    return {
+      slot: q.slot,
+      type: q.type,
+      status: q.status,
+      stateclass: q.stateclass,
+      savedAnswer,
+      question: parsed.text,
+      options: parsed.options,
+    };
+  });
+}
+
 export function registerQuizzesCommand(program: Command): void {
   const quizzesCmd = program.command("quizzes");
   quizzesCmd.description("Quiz operations");
@@ -72,14 +89,14 @@ export function registerQuizzesCommand(program: Command): void {
     const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
     const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
     const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent);
+    const log = createLogger(opts.verbose, silent, outputFormat);
 
     const baseDir = getBaseDir();
     const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
 
     // Check if session exists
     if (!fs.existsSync(sessionPath)) {
-      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
+      log.error("未找到登入 session。請先執行 'openape login' 進行登入。");
       log.info(`Session 預期位置: ${sessionPath}`);
       return null;
     }
@@ -87,7 +104,7 @@ export function registerQuizzesCommand(program: Command): void {
     // Try to load WS token
     const wsToken = loadWsToken(sessionPath);
     if (!wsToken) {
-      log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
+      log.error("未找到 WS token。請先執行 'openape login' 進行登入。");
       return null;
     }
 
@@ -194,8 +211,15 @@ export function registerQuizzesCommand(program: Command): void {
           quizCmid,
         );
 
+        apiContext.log.success(`Quiz attempt ${result.attempt.attemptid} started.`);
+
+        const attemptId = result.attempt.attemptid;
+        const data = await getAllQuizAttemptDataApi(apiContext.session, attemptId);
+
+        const questions = parseQuizQuestions(data.questions);
+
         const outputData = [{
-          attemptId: result.attempt.attemptid,
+          attemptId,
           quizId: result.attempt.quizid,
           state: result.attempt.state,
           timeStart: formatTimestamp(result.attempt.timestart),
@@ -203,9 +227,10 @@ export function registerQuizzesCommand(program: Command): void {
             ? formatTimestamp(result.attempt.timefinish)
             : null,
           isPreview: result.attempt.preview,
+          totalQuestions: questions.length,
+          questions,
         }];
 
-        apiContext.log.success(`Quiz attempt ${result.attempt.attemptid} started.`);
         formatAndOutput(outputData as unknown as Record<string, unknown>[], output, apiContext.log);
       } catch (error) {
         apiContext.log.error(`Failed to start quiz attempt: ${error instanceof Error ? error.message : String(error)}`);
@@ -217,7 +242,7 @@ export function registerQuizzesCommand(program: Command): void {
     .command("info")
     .description("Get quiz attempt data and questions")
     .argument("<attempt-id>", "Quiz attempt ID")
-    .option("--page <number>", "Page number", "0")
+    .option("--page <number>", "Page number (-1 for all pages)", "-1")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (attemptId, options, command) => {
       const output: OutputFormat = getOutputFormat(command);
@@ -228,25 +253,12 @@ export function registerQuizzesCommand(program: Command): void {
       }
 
       try {
-        const data = await getQuizAttemptDataApi(
-          apiContext.session,
-          parseInt(attemptId),
-          parseInt(options.page)
-        );
+        const pageNumber = parseInt(options.page);
+        const data = pageNumber === -1
+          ? await getAllQuizAttemptDataApi(apiContext.session, parseInt(attemptId))
+          : await getQuizAttemptDataApi(apiContext.session, parseInt(attemptId), pageNumber);
 
-        const questions = Object.values(data.questions).map((q: any) => {
-          const parsed = parseQuestionHtml(q.html ?? "");
-          const savedAnswer = parseSavedAnswer(q.html ?? "");
-          return {
-            number: q.questionnumber ?? q.slot,
-            type: q.type,
-            status: q.status,
-            stateclass: q.stateclass,
-            savedAnswer,
-            question: parsed.text,
-            options: parsed.options,
-          };
-        });
+        const questions = parseQuizQuestions(data.questions);
 
         const outputData = [{
           attemptId: data.attempt.attemptid,
@@ -290,10 +302,9 @@ export function registerQuizzesCommand(program: Command): void {
 
       try {
         // Get attempt data to find uniqueid and sequencecheck values
-        const attemptData = await getQuizAttemptDataApi(
+        const attemptData = await getAllQuizAttemptDataApi(
           apiContext.session,
-          parseInt(attemptId),
-          0
+          parseInt(attemptId)
         );
 
         const uniqueId = attemptData.attempt.uniqueid ?? attemptData.attempt.attemptid;

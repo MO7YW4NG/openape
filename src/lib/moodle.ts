@@ -1351,6 +1351,31 @@ export async function startQuizAttemptApi(
 /**
  * Get quiz attempt data including questions via pure WS API.
  */
+export async function getAllQuizAttemptDataApi(
+  session: { wsToken: string; moodleBaseUrl: string },
+  attemptId: number
+): Promise<QuizAttemptData> {
+  const firstPage = await getQuizAttemptDataApi(session, attemptId, 0);
+
+  // Moodle re-indexes question keys per page (always starts at 0),
+  // so we must re-key by actual slot number to avoid overwrites.
+  const allQuestions: Record<number, QuizQuestion> = {};
+  for (const q of Object.values(firstPage.questions)) {
+    allQuestions[q.slot] = q;
+  }
+
+  let nextPage = firstPage.nextpage;
+  while (nextPage !== undefined && nextPage !== null && nextPage !== -1) {
+    const pageData = await getQuizAttemptDataApi(session, attemptId, nextPage);
+    for (const q of Object.values(pageData.questions)) {
+      allQuestions[q.slot] = q;
+    }
+    nextPage = pageData.nextpage;
+  }
+
+  return { ...firstPage, questions: allQuestions, nextpage: undefined };
+}
+
 export async function getQuizAttemptDataApi(
   session: { wsToken: string; moodleBaseUrl: string },
   attemptId: number,
