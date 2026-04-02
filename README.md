@@ -1,6 +1,9 @@
 <h1 align="center">
   <img src="assets/logo.svg" width="150" /><br/>
-  OpenApe CLI (Unofficial)
+  OpenApe CLI (Unofficial)<br/>
+  <a href="https://www.npmjs.com/package/@mo7yw4ng/openape"><img src="https://img.shields.io/npm/v/@mo7yw4ng/openape" alt="npm version" /></a>
+  <a href="https://jsr.io/@openape/openape"><img src="https://jsr.io/badges/@openape/openape" alt="JSR" /></a>
+  <a href="https://www.npmjs.com/package/@mo7yw4ng/openape"><img src="https://img.shields.io/npm/dm/@mo7yw4ng/openape" alt="npm downloads" /></a>
 </h1>
 
 中原大學 [i-Learning](https://ilearning.cycu.edu.tw/) (Moodle) 平台自動化命令列工具 (CLI)，幫助你快速查詢課程、觀看影片、下載教材。
