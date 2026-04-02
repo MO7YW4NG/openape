@@ -281,14 +281,14 @@ export async function createApiContext(
   const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
   const outputFormat = command ? getOutputFormat(command) : "json";
   const silent = outputFormat === "json" && !opts.verbose;
-  const log = createLogger(opts.verbose, silent);
+  const log = createLogger(opts.verbose, silent, outputFormat);
 
   const sessionPath = getSessionPath();
 
   // Try to load WS token
   const wsToken = loadWsToken(sessionPath);
   if (!wsToken) {
-    log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
+    console.error("未找到 WS token。請先執行 'openape login' 進行登入。");
     return null;
   }
 

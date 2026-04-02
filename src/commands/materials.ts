@@ -1,13 +1,9 @@
-import { getBaseDir, getOutputFormat, shouldSilenceLogs, sanitizeFilename, getSessionPath, formatFileSize } from "../lib/utils.ts";
+import { getOutputFormat, sanitizeFilename, formatFileSize } from "../lib/utils.ts";
 import { Command } from "commander";
-import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
-import { getEnrolledCourses, getEnrolledCoursesApi, getResourcesByCoursesApi, updateActivityCompletionStatusManually, getSiteInfoApi, moodleApiCall } from "../lib/moodle.ts";
-import { createLogger } from "../lib/logger.ts";
-import { launchAuthenticated, createApiContext } from "../lib/auth.ts";
-import { extractSessionInfo } from "../lib/session.ts";
-import { closeBrowserSafely } from "../lib/auth.ts";
+import type { Logger, OutputFormat } from "../lib/types.ts";
+import { getEnrolledCoursesApi, getResourcesByCoursesApi, updateActivityCompletionStatusManually, getSiteInfoApi, moodleApiCall } from "../lib/moodle.ts";
+import { createApiContext } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
-import { loadWsToken } from "../lib/token.ts";
 import path from "node:path";
 import fs from "node:fs";
 
@@ -35,56 +31,12 @@ export function registerMaterialsCommand(program: Command): void {
   const materialsCmd = program.command("materials");
   materialsCmd.description("Material/resource operations");
 
-  // Helper function to create session context (for download commands)
-  async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
-    log: Logger;
-    page: import("playwright-core").Page;
-    session: SessionInfo;
-    browser: any;
-    context: any;
-  } | null> {
-    const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
-    const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent);
-
-    const sessionPath = getSessionPath();
-
-    if (!fs.existsSync(sessionPath)) {
-      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
-      return null;
-    }
-
-    const config = {
-      username: "",
-      password: "",
-      courseUrl: "",
-      moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-      headless: !options.headed,
-      slowMo: 0,
-      authStatePath: sessionPath,
-      ollamaBaseUrl: "",
-    };
-
-    log.info("啟動瀏覽器...");
-    const { browser, context, page } = await launchAuthenticated(config, log);
-
-    try {
-      const session = await extractSessionInfo(page, config, log);
-      return { log, page, session, browser, context };
-    } catch (err) {
-      await context.close();
-      await browser.close();
-      throw err;
-    }
-  }
-
-  // Helper to download a single resource
-  async function downloadResource(
-    page: import("playwright-core").Page,
+  // Helper to download a single resource via HTTP (no browser needed)
+  async function downloadResourceHttp(
     resource: MaterialWithCourse,
     outputDir: string,
-    log: Logger
+    log: Logger,
+    token: string
   ): Promise<DownloadedFile | null> {
     try {
       // Only download resource type (skip url)
@@ -93,33 +45,11 @@ export function registerMaterialsCommand(program: Command): void {
         return null;
       }
 
-      // Create course directory
       const courseDir = path.join(outputDir, sanitizeFilename(resource.course_name));
       await fs.promises.mkdir(courseDir, { recursive: true });
 
-      // Navigate to resource page
-      log.debug(`  Downloading: ${resource.name}`);
-      await page.goto(resource.url, { waitUntil: "domcontentloaded", timeout: 30000 });
-
-      // Try to find download link on the page
-      const downloadLinks = await page.$$eval('a[href*="forcedownload=1"]', (links) =>
-        links.map((a) => (a as HTMLAnchorElement).href)
-      );
-
-      if (downloadLinks.length === 0) {
-        log.warn(`    No download link found for: ${resource.name}`);
-        return null;
-      }
-
-      // Download the first available file
-      const downloadUrl = downloadLinks[0];
-
-      // Extract filename from URL or use resource name
-      const urlObj = new URL(downloadUrl);
-      const filenameParam = urlObj.searchParams.get("filename");
-      let filename = filenameParam || sanitizeFilename(resource.name);
-
-      // Add extension if missing
+      // Build filename
+      let filename = sanitizeFilename(resource.name);
       if (resource.mimetype && !path.extname(filename)) {
         const extMap: Record<string, string> = {
           "application/pdf": ".pdf",
@@ -140,28 +70,58 @@ export function registerMaterialsCommand(program: Command): void {
 
       const outputPath = path.join(courseDir, filename);
 
-      // Trigger download
-      const downloadPromise = page.waitForEvent("download", { timeout: 30000 });
-      await page.goto(downloadUrl, { waitUntil: "domcontentloaded" });
-      const download = await downloadPromise;
+      // Skip if already exists
+      if (fs.existsSync(outputPath)) {
+        log.debug(`  Skipping (exists): ${filename}`);
+        const stats = await fs.promises.stat(outputPath);
+        return { filename, path: outputPath, size: stats.size, course_id: resource.course_id, course_name: resource.course_name };
+      }
 
-      // Save file
-      await download.saveAs(outputPath);
+      // Download via HTTP with WS token
+      const separator = resource.url.includes("?") ? "&" : "?";
+      const downloadUrl = `${resource.url}${separator}token=${token}`;
 
-      const stats = await fs.promises.stat(outputPath);
-      log.success(`    Downloaded: ${filename} (${formatFileSize(stats.size, 1)} KB)`);
+      log.debug(`  Downloading: ${resource.name}`);
+      const response = await fetch(downloadUrl);
+      if (!response.ok) {
+        log.warn(`    Failed to download ${resource.name}: HTTP ${response.status}`);
+        return null;
+      }
 
-      return {
-        filename,
-        path: outputPath,
-        size: stats.size,
-        course_id: resource.course_id,
-        course_name: resource.course_name,
-      };
+      const arrayBuffer = await response.arrayBuffer();
+      const data = new Uint8Array(arrayBuffer);
+      await fs.promises.writeFile(outputPath, data);
+
+      log.success(`    Downloaded: ${filename} (${formatFileSize(data.byteLength, 1)} KB)`);
+
+      return { filename, path: outputPath, size: data.byteLength, course_id: resource.course_id, course_name: resource.course_name };
     } catch (err) {
       log.warn(`    Failed to download ${resource.name}: ${err instanceof Error ? err.message : String(err)}`);
       return null;
     }
+  }
+
+  // Helper to build material list from API resources
+  function buildMaterialsList(courses: any[], apiResources: any[]): MaterialWithCourse[] {
+    const courseMap = new Map(courses.map(c => [c.id, c]));
+    const materials: MaterialWithCourse[] = [];
+    for (const resource of apiResources) {
+      const course = courseMap.get(resource.courseId);
+      if (course) {
+        materials.push({
+          course_id: resource.courseId,
+          course_name: course.fullname,
+          cmid: resource.cmid,
+          name: resource.name,
+          url: resource.url,
+          modType: resource.modType,
+          mimetype: resource.mimetype,
+          filesize: resource.filesize,
+          modified: resource.modified,
+        });
+      }
+    }
+    return materials;
   }
 
   materialsCmd
@@ -235,169 +195,112 @@ export function registerMaterialsCommand(program: Command): void {
 
   materialsCmd
     .command("download")
-    .description("Download all materials from a specific course (requires browser)")
+    .description("Download all materials from a specific course")
     .argument("<course-id>", "Course ID")
     .option("--output-dir <path>", "Output directory", "./downloads")
     .action(async (courseId, options, command) => {
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      const { log, session } = apiContext;
 
-      try {
-        const courses = await getEnrolledCourses(page, session, log);
-        const course = courses.find(c => c.id === parseInt(courseId, 10));
+      const courses = await getEnrolledCoursesApi(session);
+      const course = courses.find((c: any) => c.id === parseInt(courseId, 10));
 
-        if (!course) {
-          log.error(`Course not found: ${courseId}`);
-          process.exitCode = 1;
-          return;
+      if (!course) {
+        log.error(`Course not found: ${courseId}`);
+        process.exitCode = 1;
+        return;
+      }
+
+      const apiResources = await getResourcesByCoursesApi(session, [course.id]);
+      const materials = buildMaterialsList(courses, apiResources);
+
+      log.info(`Found ${materials.length} materials in course: ${course.fullname}`);
+
+      const downloadedFiles: DownloadedFile[] = [];
+      for (const material of materials) {
+        const result = await downloadResourceHttp(material, options.outputDir, log, session.wsToken);
+        if (result) {
+          downloadedFiles.push(result);
         }
+      }
 
-        // Navigate to course page to find materials
-        await page.goto(`https://ilearning.cycu.edu.tw/course/view.php?id=${course.id}`, { waitUntil: "domcontentloaded" });
-
-        // Find all resource links
-        const materials: MaterialWithCourse[] = [];
-        const resourceLinks = await page.$$eval('a[href*="/mod/resource/view.php"]', (links) => {
-          return links.map((a) => ({
-            url: (a as HTMLAnchorElement).href,
-            name: a.textContent?.trim() || "",
-          }));
-        });
-
-        for (const link of resourceLinks) {
-          const cmidMatch = link.url.match(/id=(\d+)/);
-          if (cmidMatch) {
-            materials.push({
-              course_id: course.id,
-              course_name: course.fullname,
-              cmid: cmidMatch[1],
-              name: link.name,
-              url: link.url,
-              modType: "resource",
-            });
-          }
-        }
-
-        log.info(`Found ${materials.length} materials in course: ${course.fullname}`);
-
-        const downloadedFiles: DownloadedFile[] = [];
-        for (const material of materials) {
-          const result = await downloadResource(page, material, options.outputDir, log);
-          if (result) {
-            downloadedFiles.push(result);
-          }
-        }
-
-        const summary = {
+      const output = {
+        status: "success",
+        timestamp: new Date().toISOString(),
+        downloaded_files: downloadedFiles.map(f => ({
+          filename: f.filename,
+          path: f.path,
+          size: f.size,
+          course_id: f.course_id,
+          course_name: f.course_name,
+        })),
+        summary: {
           total_materials: materials.length,
           downloaded: downloadedFiles.length,
           skipped: materials.length - downloadedFiles.length,
           total_size: downloadedFiles.reduce((sum, f) => sum + f.size, 0),
-        };
-
-        const output = {
-          status: "success",
-          timestamp: new Date().toISOString(),
-          downloaded_files: downloadedFiles.map(f => ({
-            filename: f.filename,
-            path: f.path,
-            size: f.size,
-            course_id: f.course_id,
-            course_name: f.course_name,
-          })),
-          summary,
-        };
-        console.log(JSON.stringify(output));
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
-      }
+        },
+      };
+      console.log(JSON.stringify(output));
     });
 
   materialsCmd
     .command("download-all")
-    .description("Download all materials from all courses (requires browser)")
+    .description("Download all materials from all courses")
     .option("--output-dir <path>", "Output directory", "./downloads")
     .option("--level <type>", "Course level: in_progress (default) | all", "in_progress")
     .action(async (options, command) => {
-      const context = await createSessionContext(options, command);
-      if (!context) {
+      const apiContext = await createApiContext(options, command);
+      if (!apiContext) {
         process.exitCode = 1;
         return;
       }
 
-      const { log, page, session, browser, context: browserContext } = context;
+      const { log, session } = apiContext;
 
-      try {
-        const classification = options.level === "all" ? undefined : "inprogress";
-        const courses = await getEnrolledCourses(page, session, log, { classification });
+      const classification = options.level === "all" ? undefined : "inprogress";
+      const courses = await getEnrolledCoursesApi(session, { classification });
 
-        log.info(`Scanning ${courses.length} courses for materials...`);
+      log.info(`Scanning ${courses.length} courses for materials...`);
 
-        const allMaterials: MaterialWithCourse[] = [];
-        for (const course of courses) {
-          await page.goto(`https://ilearning.cycu.edu.tw/course/view.php?id=${course.id}`, { waitUntil: "domcontentloaded" });
+      const courseIds = courses.map((c: any) => c.id);
+      const apiResources = await getResourcesByCoursesApi(session, courseIds);
+      const allMaterials = buildMaterialsList(courses, apiResources);
 
-          const resourceLinks = await page.$$eval('a[href*="/mod/resource/view.php"]', (links) => {
-            return links.map((a) => ({
-              url: (a as HTMLAnchorElement).href,
-              name: a.textContent?.trim() || "",
-            }));
-          });
+      log.info(`Found ${allMaterials.length} materials across ${courses.length} courses`);
 
-          for (const link of resourceLinks) {
-            const cmidMatch = link.url.match(/id=(\d+)/);
-            if (cmidMatch) {
-              allMaterials.push({
-                course_id: course.id,
-                course_name: course.fullname,
-                cmid: cmidMatch[1],
-                name: link.name,
-                url: link.url,
-                modType: "resource",
-              });
-            }
-          }
+      const downloadedFiles: DownloadedFile[] = [];
+      for (const material of allMaterials) {
+        const result = await downloadResourceHttp(material, options.outputDir, log, session.wsToken);
+        if (result) {
+          downloadedFiles.push(result);
         }
+      }
 
-        log.info(`Found ${allMaterials.length} materials across ${courses.length} courses`);
-
-        const downloadedFiles: DownloadedFile[] = [];
-        for (const material of allMaterials) {
-          const result = await downloadResource(page, material, options.outputDir, log);
-          if (result) {
-            downloadedFiles.push(result);
-          }
-        }
-
-        const summary = {
+      const output = {
+        status: "success",
+        timestamp: new Date().toISOString(),
+        downloaded_files: downloadedFiles.map(f => ({
+          filename: f.filename,
+          path: f.path,
+          size: f.size,
+          course_id: f.course_id,
+          course_name: f.course_name,
+        })),
+        summary: {
           total_courses: courses.length,
           total_materials: allMaterials.length,
           downloaded: downloadedFiles.length,
           skipped: allMaterials.length - downloadedFiles.length,
           total_size: downloadedFiles.reduce((sum, f) => sum + f.size, 0),
-        };
-
-        const output = {
-          status: "success",
-          timestamp: new Date().toISOString(),
-          downloaded_files: downloadedFiles.map(f => ({
-            filename: f.filename,
-            path: f.path,
-            size: f.size,
-            course_id: f.course_id,
-            course_name: f.course_name,
-          })),
-          summary,
-        };
-        console.log(JSON.stringify(output));
-      } finally {
-        await closeBrowserSafely(browser, browserContext);
-      }
+        },
+      };
+      console.log(JSON.stringify(output));
     });
 
   materialsCmd

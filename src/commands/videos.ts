@@ -24,14 +24,14 @@ export function registerVideosCommand(program: Command): void {
     // Don't silence logs for commands that don't have explicit output format control
     const outputFormat = command && command.optsWithGlobals ? getOutputFormat(command) : "table";
     const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent);
+    const log = createLogger(opts.verbose, silent, outputFormat);
 
     const baseDir = getBaseDir();
     const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
 
     // Check if session exists
     if (!fs.existsSync(sessionPath)) {
-      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
+      console.error("未找到登入 session。請先執行 'openape login' 進行登入。");
       log.info(`Session 預期位置: ${sessionPath}`);
       return null;
     }
@@ -39,7 +39,7 @@ export function registerVideosCommand(program: Command): void {
     // Try to load WS token
     const wsToken = loadWsToken(sessionPath);
     if (!wsToken) {
-      log.error("未找到 WS token。請先執行 'openape auth login' 進行登入。");
+      console.error("未找到 WS token。請先執行 'openape login' 進行登入。");
       return null;
     }
 
@@ -63,13 +63,13 @@ export function registerVideosCommand(program: Command): void {
     const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
     const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
     const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent);
+    const log = createLogger(opts.verbose, silent, outputFormat);
 
     const baseDir = getBaseDir();
     const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
 
     if (!fs.existsSync(sessionPath)) {
-      log.error("未找到登入 session。請先執行 'openape auth login' 進行登入。");
+      console.error("未找到登入 session。請先執行 'openape login' 進行登入。");
       return null;
     }
 

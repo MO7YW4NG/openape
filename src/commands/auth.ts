@@ -1,7 +1,7 @@
 import { getBaseDir } from "../lib/utils.ts";
 import { Command } from "commander";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import type { Logger } from "../lib/types.ts";
+import type { AppConfig } from "../lib/types.ts";
 import { createLogger } from "../lib/logger.ts";
 
 import { findEdgePath } from "../lib/auth.ts";
@@ -140,31 +140,42 @@ export function registerCommand(program: Command): void {
             // Ignore sesskey extraction errors
           }
 
-          // Try to acquire WS token
+          // Acquire WS token
+          let wsToken: string | undefined;
           try {
-            const config = {
-              username: "",
-              password: "",
-              courseUrl: "",
-              moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-              headless: false,
-              slowMo: 0,
-              authStatePath: sessionPath,
-              ollamaBaseUrl: "",
-            };
-            const wsToken = await acquireWsToken(page, config, log);
+            wsToken = await acquireWsToken(page, { moodleBaseUrl: "https://ilearning.cycu.edu.tw" } as AppConfig, log);
             saveWsToken(sessionPath, wsToken);
           } catch {
             // WS token is optional, ignore errors
           }
 
           const stats = fs.statSync(sessionPath);
+
+          // Get user info via WS API
+          let user: { userid: number; username: string; fullname: string } | undefined;
+          try {
+            if (wsToken) {
+              const siteInfo = await getSiteInfoApi({
+                wsToken,
+                moodleBaseUrl: "https://ilearning.cycu.edu.tw",
+              });
+              user = {
+                userid: siteInfo.userid,
+                username: siteInfo.username,
+                fullname: siteInfo.fullname,
+              };
+            }
+          } catch {
+            // Ignore
+          }
+
           const result = {
             status: "success",
             message: "Login successful",
             session_path: sessionPath,
             session_size: stats.size,
-            updated: true
+            updated: true,
+            ...(user ? { user } : {}),
           };
 
           console.log(JSON.stringify(result, null, 2));
@@ -258,7 +269,7 @@ export function registerCommand(program: Command): void {
           status: "error",
           error: "Session not found",
           session_path: sessionPath,
-          hint: "Run 'openape auth login' first"
+          hint: "Run 'openape login' first"
         };
         console.log(JSON.stringify(result, null, 2));
       }
