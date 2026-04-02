@@ -2,6 +2,7 @@ import { Command } from "commander";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { fileURLToPath } from "node:url";
 
 const SKILL_NAME = "openape";
 const GITHUB_RAW_URL = `https://raw.githubusercontent.com/mo7yw4ng/openape/refs/heads/main/skills/${SKILL_NAME}/SKILL.md`;
@@ -22,12 +23,11 @@ const PLATFORMS: Record<string, { name: string; path: string }> = {
 async function readSkillContent(): Promise<string> {
   // Try local path first (relative to this file's location)
   try {
-    const base = path.dirname(new URL(import.meta.url).pathname);
-    const normalized = process.platform === "win32" ? base.replace(/^\//, "") : base;
+    const base = path.dirname(fileURLToPath(import.meta.url));
 
     // When running from source: src/commands/ → ../../skills/openape/SKILL.md
     // When bundled by dnt into build/: esm/commands/ or script/ → ../../skills/openape/SKILL.md
-    const localPath = path.resolve(normalized, "..", "..", "skills", SKILL_NAME, "SKILL.md");
+    const localPath = path.resolve(base, "..", "..", "skills", SKILL_NAME, "SKILL.md");
     return await fs.promises.readFile(localPath, "utf-8");
   } catch {
     // import.meta.url may be unavailable in some environments, or file doesn't exist

@@ -5,27 +5,53 @@ import type { AppConfig, Logger, OutputFormat } from "./types.ts";
 import { acquireWsToken, loadWsToken, saveWsToken } from "./token.ts";
 
 /**
- * Find a Chromium-based browser executable on Windows.
+ * Find a Chromium-based browser executable on Windows, macOS, or Linux.
  * Priority: Edge → Chrome → Brave
  */
 export function findEdgePath(): string {
-  const roots = [
-    process.env.PROGRAMFILES,
-    process.env["PROGRAMFILES(X86)"],
-    process.env.LOCALAPPDATA,
-  ].filter(Boolean) as string[];
+  const platform = process.platform;
 
-  const browsers = [
-    { name: "Edge",  suffix: "Microsoft\\Edge\\Application\\msedge.exe" },
-    { name: "Chrome", suffix: "Google\\Chrome\\Application\\chrome.exe" },
-    { name: "Brave",  suffix: "BraveSoftware\\Brave-Browser\\Application\\brave.exe" },
-  ];
-
-  for (const { suffix } of browsers) {
-    for (const root of roots) {
-      const candidate = path.join(root, suffix);
+  if (platform === "darwin") {
+    const candidates = [
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    ];
+    for (const candidate of candidates) {
       if (fs.existsSync(candidate)) return candidate;
     }
+  } else if (platform === "linux") {
+    const candidates = [
+      "/usr/bin/microsoft-edge",
+      "/usr/bin/google-chrome",
+      "/usr/bin/chromium-browser",
+      "/usr/bin/chromium",
+      "/usr/bin/brave-browser",
+    ];
+    for (const candidate of candidates) {
+      if (fs.existsSync(candidate)) return candidate;
+    }
+  } else if (platform === "win32") {
+    const roots = [
+      process.env.PROGRAMFILES,
+      process.env["PROGRAMFILES(X86)"],
+      process.env.LOCALAPPDATA,
+    ].filter(Boolean) as string[];
+
+    const browsers = [
+      { suffix: "Microsoft\\Edge\\Application\\msedge.exe" },
+      { suffix: "Google\\Chrome\\Application\\chrome.exe" },
+      { suffix: "BraveSoftware\\Brave-Browser\\Application\\brave.exe" },
+    ];
+
+    for (const { suffix } of browsers) {
+      for (const root of roots) {
+        const candidate = path.join(root, suffix);
+        if (fs.existsSync(candidate)) return candidate;
+      }
+    }
+  } else {
+    throw new Error(`不支援的作業系統：${platform}`);
   }
 
   throw new Error(
