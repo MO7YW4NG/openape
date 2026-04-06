@@ -3,10 +3,10 @@
   "version": "2.0.0",
   "description": "CLI tool for CYCU i-Learning platform",
   "bin": {
-    "openape": "bin/openape"
+    "openape": "bin/openape.js"
   },
   "scripts": {
-    "build": "tsc && npx shx mv bin/index.js bin/openape"
+    "build": "tsc && npx shx mv bin/index.js bin/openape.js"
   },
   "optionalDependencies": {
     "@mo7yw4ng/openape-linux-x64": "2.0.0",

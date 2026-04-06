@@ -50,7 +50,7 @@ jobs:
             node_pkg: openape-win32-arm64
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Get version from release tag
         id: version
@@ -67,7 +67,7 @@ jobs:
         run: cargo install cross
 
       - name: Cache cargo
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -84,7 +84,7 @@ jobs:
         run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24.x'
           registry-url: 'https://registry.npmjs.org'
@@ -110,6 +110,8 @@ jobs:
             };
             replace('npm/package.json.tmpl', 'npm/${{ matrix.node_pkg }}/package.json');
             replace('npm/jsr.json.tmpl', 'npm/${{ matrix.node_pkg }}/jsr.json');
+            // Create a dummy JS file for JSR satisfaction
+            fs.writeFileSync('npm/${{ matrix.node_pkg }}/bin/mod.js', 'export const version = \"' + process.env.node_version + '\";\n');
           "
           cp skills/openape/SKILL.md "npm/${{ matrix.node_pkg }}/bin/skills/openape/SKILL.md"
           if [[ "${{ matrix.node_os }}" == "win32" ]]; then
@@ -136,7 +138,7 @@ jobs:
     needs: build-and-publish-platform
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Get version from release tag
         id: version
@@ -144,7 +146,7 @@ jobs:
         run: echo "version=${GITHUB_REF_NAME#v}" >> $GITHUB_OUTPUT
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
           node-version: '24.x'
           registry-url: 'https://registry.npmjs.org'
