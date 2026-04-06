@@ -114,13 +114,18 @@ export async function createSessionContext(
 /**
  * Helper to output formatted data.
  * For JSON output (agent mode), exits immediately after output.
+ * If meta is provided, it is printed as the first line before items.
  */
 export function formatAndOutput<T extends Record<string, unknown>>(
   data: T | T[],
   format: OutputFormat,
-  log: Logger
+  log: Logger,
+  meta?: Record<string, unknown>
 ): void {
   if (format === "json") {
+    if (meta) {
+      console.log(JSON.stringify(meta));
+    }
     if (Array.isArray(data)) {
       for (const item of data) {
         console.log(JSON.stringify(item));

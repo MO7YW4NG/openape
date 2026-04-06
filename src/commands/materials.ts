@@ -130,6 +130,7 @@ export function registerMaterialsCommand(program: Command): void {
     .option("--level <type>", "Course level: in_progress (default) | all", "in_progress")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
       const apiContext = await createApiContext(options, command);
       if (!apiContext) {
         process.exitCode = 1;
@@ -141,11 +142,9 @@ export function registerMaterialsCommand(program: Command): void {
         classification,
       });
 
-      // Get materials via WS API (no browser needed!)
       const courseIds = courses.map(c => c.id);
       const apiResources = await getResourcesByCoursesApi(apiContext.session, courseIds);
 
-      // Build a map of courseId -> course for quick lookup
       const courseMap = new Map(courses.map(c => [c.id, c]));
 
       const allMaterials: MaterialWithCourse[] = [];
@@ -166,31 +165,33 @@ export function registerMaterialsCommand(program: Command): void {
         }
       }
 
-      const output = {
-        status: "success",
-        timestamp: new Date().toISOString(),
-        level: options.level,
-        materials: allMaterials.map(m => ({
-          course_id: m.course_id,
-          course_name: m.course_name,
-          id: m.cmid,
-          name: m.name,
-          type: m.modType,
-          mimetype: m.mimetype,
-          filesize: m.filesize,
-          modified: m.modified ? new Date(m.modified * 1000).toISOString() : null,
-          url: m.url,
-        })),
-        summary: {
+      const items = allMaterials.map(m => ({
+        course_id: m.course_id,
+        course_name: m.course_name,
+        id: m.cmid,
+        name: m.name,
+        type: m.modType,
+        mimetype: m.mimetype,
+        filesize: m.filesize,
+        modified: m.modified ? new Date(m.modified * 1000).toISOString() : null,
+        url: m.url,
+      }));
+
+      formatAndOutput(
+        items as unknown as Record<string, unknown>[],
+        output,
+        apiContext.log,
+        {
+          status: "success",
+          timestamp: new Date().toISOString(),
           total_courses: courses.length,
           total_materials: allMaterials.length,
           by_type: allMaterials.reduce((acc, m) => {
             acc[m.modType] = (acc[m.modType] || 0) + 1;
             return acc;
           }, {} as Record<string, number>),
-        },
-      };
-      console.log(JSON.stringify(output));
+        }
+      );
     });
 
   materialsCmd
@@ -229,24 +230,27 @@ export function registerMaterialsCommand(program: Command): void {
         }
       }
 
-      const output = {
-        status: "success",
-        timestamp: new Date().toISOString(),
-        downloaded_files: downloadedFiles.map(f => ({
-          filename: f.filename,
-          path: f.path,
-          size: f.size,
-          course_id: f.course_id,
-          course_name: f.course_name,
-        })),
-        summary: {
+      const items = downloadedFiles.map(f => ({
+        filename: f.filename,
+        path: f.path,
+        size: f.size,
+        course_id: f.course_id,
+        course_name: f.course_name,
+      }));
+
+      formatAndOutput(
+        items as unknown as Record<string, unknown>[],
+        "json",
+        log,
+        {
+          status: "success",
+          timestamp: new Date().toISOString(),
           total_materials: materials.length,
           downloaded: downloadedFiles.length,
           skipped: materials.length - downloadedFiles.length,
           total_size: downloadedFiles.reduce((sum, f) => sum + f.size, 0),
-        },
-      };
-      console.log(JSON.stringify(output));
+        }
+      );
     });
 
   materialsCmd
@@ -282,25 +286,28 @@ export function registerMaterialsCommand(program: Command): void {
         }
       }
 
-      const output = {
-        status: "success",
-        timestamp: new Date().toISOString(),
-        downloaded_files: downloadedFiles.map(f => ({
-          filename: f.filename,
-          path: f.path,
-          size: f.size,
-          course_id: f.course_id,
-          course_name: f.course_name,
-        })),
-        summary: {
+      const items = downloadedFiles.map(f => ({
+        filename: f.filename,
+        path: f.path,
+        size: f.size,
+        course_id: f.course_id,
+        course_name: f.course_name,
+      }));
+
+      formatAndOutput(
+        items as unknown as Record<string, unknown>[],
+        "json",
+        log,
+        {
+          status: "success",
+          timestamp: new Date().toISOString(),
           total_courses: courses.length,
           total_materials: allMaterials.length,
           downloaded: downloadedFiles.length,
           skipped: allMaterials.length - downloadedFiles.length,
           total_size: downloadedFiles.reduce((sum, f) => sum + f.size, 0),
-        },
-      };
-      console.log(JSON.stringify(output));
+        }
+      );
     });
 
   materialsCmd

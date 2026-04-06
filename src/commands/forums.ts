@@ -3,6 +3,7 @@ import { Command } from "commander";
 import type { OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi, getForumsApi, getForumDiscussionsApi, getDiscussionPostsApi, addForumDiscussionApi, addForumPostApi, deleteForumPostApi, resolveForumId } from "../lib/moodle.ts";
 import { createApiContext } from "../lib/auth.ts";
+import { formatAndOutput } from "../index.ts";
 
 interface ForumWithCourse {
   course_id: number;
@@ -50,15 +51,12 @@ export function registerForumsCommand(program: Command): void {
       }
     }
 
-    console.log(JSON.stringify({
-      status: "success",
-      timestamp: new Date().toISOString(),
-      total_courses: courses.length,
-      total_forums: allForums.length,
-    }));
-    for (const forum of allForums) {
-      console.log(JSON.stringify(forum));
-    }
+    formatAndOutput(
+      allForums as unknown as Record<string, unknown>[],
+      "json",
+      apiContext.log,
+      { status: "success", timestamp: new Date().toISOString(), total_courses: courses.length, total_forums: allForums.length }
+    );
   }
 
   forumsCmd
@@ -81,6 +79,7 @@ export function registerForumsCommand(program: Command): void {
     .argument("<forum-id>", "Forum ID")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (forumId, options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
       const apiContext = await createApiContext(options, command);
       if (!apiContext) {
         process.exitCode = 1;
@@ -89,33 +88,29 @@ export function registerForumsCommand(program: Command): void {
 
       const resolved = await resolveForumId(apiContext.session, forumId);
       if (!resolved) {
-        console.log(JSON.stringify({ status: "error", error: "Forum not found" }));
+        apiContext.log.error("Forum not found");
         process.exitCode = 1;
         return;
       }
 
       const discussions = await getForumDiscussionsApi(apiContext.session, resolved.forumId);
 
-      const meta = {
-        status: "success",
-        timestamp: new Date().toISOString(),
-        forum_id: resolved.forumId,
-        forum_name: resolved.name ?? null,
-        course_id: resolved.courseid ?? null,
-        total_discussions: discussions.length,
-      };
-      console.log(JSON.stringify(meta));
-      for (const d of discussions) {
-        console.log(JSON.stringify({
-          id: d.id,
-          name: d.name,
-          user_id: d.userId,
-          time_modified: d.timeModified,
-          post_count: d.postCount,
-          unread: d.unread,
-          message: stripHtmlTags(d.message || ""),
-        }));
-      }
+      const items = discussions.map(d => ({
+        id: d.id,
+        name: d.name,
+        user_id: d.userId,
+        time_modified: d.timeModified,
+        post_count: d.postCount,
+        unread: d.unread,
+        message: stripHtmlTags(d.message || ""),
+      }));
+
+      formatAndOutput(
+        items as unknown as Record<string, unknown>[],
+        output,
+        apiContext.log,
+        { status: "success", timestamp: new Date().toISOString(), forum_id: resolved.forumId, forum_name: resolved.name ?? null, course_id: resolved.courseid ?? null, total_discussions: discussions.length }
+      );
     });
 
   forumsCmd
@@ -133,37 +128,23 @@ export function registerForumsCommand(program: Command): void {
 
       const posts = await getDiscussionPostsApi(apiContext.session, parseInt(discussionId, 10));
 
-      if (output === "json") {
-        const result = {
-          status: "success",
-          timestamp: new Date().toISOString(),
-          discussion_id: discussionId,
-          posts: posts.map(p => ({
-            id: p.id,
-            subject: p.subject,
-            author: p.author,
-            author_id: p.authorId,
-            created: formatTimestamp(p.created),
-            modified: formatTimestamp(p.modified),
-            message: p.message,
-            unread: p.unread,
-          })),
-          summary: {
-            total_posts: posts.length,
-          },
-        };
-        console.log(JSON.stringify(result));
-      } else if (output === "table") {
-        console.log(`Discussion ${discussionId} - ${posts.length} posts`);
-        console.log("Use --output json to see full post content");
-        const tablePosts = posts.map(p => ({
-          id: p.id,
-          subject: p.subject.substring(0, 50) + (p.subject.length > 50 ? "..." : ""),
-          author: p.author,
-          created: new Date(p.created * 1000).toLocaleString(),
-        }));
-        console.table(tablePosts);
-      }
+      const items = posts.map(p => ({
+        id: p.id,
+        subject: p.subject,
+        author: p.author,
+        author_id: p.authorId,
+        created: formatTimestamp(p.created),
+        modified: formatTimestamp(p.modified),
+        message: p.message,
+        unread: p.unread,
+      }));
+
+      formatAndOutput(
+        items as unknown as Record<string, unknown>[],
+        output,
+        apiContext.log,
+        { status: "success", timestamp: new Date().toISOString(), discussion_id: discussionId, total_posts: posts.length }
+      );
     });
 
   forumsCmd

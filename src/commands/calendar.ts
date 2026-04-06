@@ -1,7 +1,9 @@
-import { formatTimestamp } from "../lib/utils.ts";
+import { getOutputFormat, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
+import type { OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi, getCalendarEventsApi } from "../lib/moodle.ts";
 import { createApiContext } from "../lib/auth.ts";
+import { formatAndOutput } from "../index.ts";
 import fs from "node:fs";
 
 export function registerCalendarCommand(program: Command): void {
@@ -16,6 +18,7 @@ export function registerCalendarCommand(program: Command): void {
     .option("--course <id>", "Filter by course ID")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
       const days = parseInt(options.days, 10);
       const apiContext = await createApiContext(options, command);
       if (!apiContext) {
@@ -59,28 +62,32 @@ export function registerCalendarCommand(program: Command): void {
         filteredEvents = allEvents.filter(e => e.timestart > now);
       }
 
-      console.log(JSON.stringify({
-        status: "success",
-        timestamp: new Date().toISOString(),
-        total_events: allEvents.length,
-        upcoming: allEvents.filter(e => e.timestart > now).length,
-        by_type: allEvents.reduce((acc, e) => {
-          acc[e.eventtype] = (acc[e.eventtype] || 0) + 1;
-          return acc;
-        }, {} as Record<string, number>),
+      const items = filteredEvents.map(e => ({
+        id: e.id,
+        name: e.name,
+        description: e.description,
+        course_id: e.courseid,
+        event_type: e.eventtype,
+        start_time: formatTimestamp(e.timestart),
+        end_time: e.timeduration ? formatTimestamp(e.timestart + Math.floor(e.timeduration / 1000)) : null,
+        location: e.location,
       }));
-      for (const e of filteredEvents) {
-        console.log(JSON.stringify({
-          id: e.id,
-          name: e.name,
-          description: e.description,
-          course_id: e.courseid,
-          event_type: e.eventtype,
-          start_time: formatTimestamp(e.timestart),
-          end_time: e.timeduration ? formatTimestamp(e.timestart + Math.floor(e.timeduration / 1000)) : null,
-          location: e.location,
-        }));
-      }
+
+      formatAndOutput(
+        items as unknown as Record<string, unknown>[],
+        output,
+        apiContext.log,
+        {
+          status: "success",
+          timestamp: new Date().toISOString(),
+          total_events: allEvents.length,
+          upcoming: allEvents.filter(e => e.timestart > now).length,
+          by_type: allEvents.reduce((acc, e) => {
+            acc[e.eventtype] = (acc[e.eventtype] || 0) + 1;
+            return acc;
+          }, {} as Record<string, number>),
+        }
+      );
     });
 
   calendarCmd

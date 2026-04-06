@@ -367,8 +367,8 @@ export async function getForumsApi(
 
 /**
  * Resolve a forum ID (cmid or instance ID) to a forum instance ID.
- * First tries the ID as a forum instance ID via a lightweight discussions call.
- * Falls back to resolving via core_course_get_course_module (for cmid).
+ * Tries cmid resolution first (via core_course_get_course_module) to get name/course info.
+ * Falls back to treating the ID as a raw forum instance ID.
  */
 export async function resolveForumId(
   session: { wsToken: string; moodleBaseUrl: string },
@@ -376,19 +376,7 @@ export async function resolveForumId(
 ): Promise<{ forumId: number; cmid?: number; name?: string; courseid?: number } | null> {
   const numId = parseInt(id, 10);
 
-  // Try as forum instance ID first (most common case)
-  try {
-    await moodleApiCall<{ discussions?: unknown[] }>(
-      session,
-      "mod_forum_get_forum_discussions",
-      { forumid: numId, limit: 0 }
-    );
-    return { forumId: numId };
-  } catch {
-    // Not a valid forum instance ID, try as cmid
-  }
-
-  // Resolve cmid -> forum instance via core_course_get_course_module
+  // Try cmid resolution first (gets name + course info)
   try {
     const cm = await moodleApiCall<{ cm: { instance: number; name: string; course: number; modname: string } }>(
       session,
@@ -404,7 +392,22 @@ export async function resolveForumId(
       };
     }
   } catch {
-    // cmid resolution failed
+    // Not a valid cmid, try as forum instance ID
+  }
+
+  // Fall back: treat as forum instance ID directly
+  try {
+    const data = await moodleApiCall<{ discussions?: unknown[] }>(
+      session,
+      "mod_forum_get_forum_discussions",
+      { forumid: numId, limit: 1 }
+    );
+    // If we get discussions back (even empty), the forum exists
+    if (data) {
+      return { forumId: numId };
+    }
+  } catch {
+    // Invalid forum instance ID
   }
 
   return null;

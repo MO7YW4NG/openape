@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
-import type { AppConfig, Logger, OutputFormat } from "./types.ts";
+import type { AppConfig, Logger, OutputFormat, SessionInfo } from "./types.ts";
 import { acquireWsToken, loadWsToken, saveWsToken } from "./token.ts";
 import { createLogger } from "./logger.ts";
 import { getOutputFormat, getSessionPath } from "./utils.ts";
+import { extractSessionInfo } from "./session.ts";
 
 /**
  * Find a Chromium-based browser executable on Windows, macOS, or Linux.
@@ -321,4 +322,45 @@ export async function createApiContext(
       moodleBaseUrl: "https://ilearning.cycu.edu.tw",
     },
   };
+}
+
+/**
+ * Create an authenticated browser context for commands that need page access.
+ * Launches a browser, restores or creates a session, and extracts session info.
+ */
+export async function createBrowserContext(
+  options: { verbose?: boolean; headed?: boolean },
+  command?: { optsWithGlobals(): { output?: OutputFormat; verbose?: boolean } }
+): Promise<{
+  log: Logger;
+  page: Page;
+  session: SessionInfo;
+  browser: Browser;
+  context: BrowserContext;
+} | null> {
+  const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
+  const outputFormat = command ? getOutputFormat(command) : "json";
+  const silent = outputFormat === "json" && !opts.verbose;
+  const log = createLogger(opts.verbose, silent, outputFormat);
+
+  const sessionPath = getSessionPath();
+  const headed = "headed" in options ? options.headed : false;
+  const config: AppConfig = {
+    courseUrl: "",
+    moodleBaseUrl: "https://ilearning.cycu.edu.tw",
+    headless: !headed,
+    slowMo: 0,
+    authStatePath: sessionPath,
+    ollamaBaseUrl: "",
+  };
+
+  try {
+    log.info("啟動瀏覽器...");
+    const { browser, context, page, wsToken } = await launchAuthenticated(config, log);
+    const session = await extractSessionInfo(page, config, log, wsToken);
+    return { log, page, session, browser, context };
+  } catch (err) {
+    log.error(err instanceof Error ? err.message : String(err));
+    return null;
+  }
 }

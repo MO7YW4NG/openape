@@ -1,10 +1,8 @@
 import { getBaseDir, getOutputFormat, sanitizeFilename } from "../lib/utils.ts";
 import { Command } from "commander";
-import type { Logger, SessionInfo, OutputFormat } from "../lib/types.ts";
+import type { OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi, getSupervideosInCourse, getSupervideosInCourseApi, getVideoMetadata, completeVideoApi, downloadVideo, getIncompleteVideosApi } from "../lib/moodle.ts";
-import { createLogger } from "../lib/logger.ts";
-import { createApiContext, launchAuthenticated, closeBrowserSafely } from "../lib/auth.ts";
-import { extractSessionInfo } from "../lib/session.ts";
+import { createApiContext, createBrowserContext, closeBrowserSafely } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
 import path from "node:path";
 import fs from "node:fs";
@@ -12,51 +10,6 @@ import fs from "node:fs";
 export function registerVideosCommand(program: Command): void {
   const videosCmd = program.command("videos");
   videosCmd.description("Video progress operations");
-
-  // Helper function to create session context (for browser-only commands)
-  async function createSessionContext(options: { verbose?: boolean; headed?: boolean }, command?: any): Promise<{
-    log: Logger;
-    page: import("playwright-core").Page;
-    session: SessionInfo;
-    browser: any;
-    context: any;
-  } | null> {
-    const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
-    const outputFormat = getOutputFormat(command || { optsWithGlobals: () => ({ output: "json" }) });
-    const silent = outputFormat === "json" && !opts.verbose;
-    const log = createLogger(opts.verbose, silent, outputFormat);
-
-    const baseDir = getBaseDir();
-    const sessionPath = path.resolve(baseDir, ".auth", "storage-state.json");
-
-    if (!fs.existsSync(sessionPath)) {
-      console.error("未找到登入 session。請先執行 'openape login' 進行登入。");
-      return null;
-    }
-
-    const config = {
-      username: "",
-      password: "",
-      courseUrl: "",
-      moodleBaseUrl: "https://ilearning.cycu.edu.tw",
-      headless: !options.headed,
-      slowMo: 0,
-      authStatePath: sessionPath,
-      ollamaBaseUrl: "",
-    };
-
-    log.info("啟動瀏覽器...");
-    const { browser, context, page } = await launchAuthenticated(config, log);
-
-    try {
-      const session = await extractSessionInfo(page, config, log);
-      return { log, page, session, browser, context };
-    } catch (err) {
-      await context.close();
-      await browser.close();
-      throw err;
-    }
-  }
 
   videosCmd
     .command("list")
@@ -123,7 +76,7 @@ export function registerVideosCommand(program: Command): void {
       }
 
       // Need browser only for getting viewId and duration (not needed for dry-run)
-      const context = await createSessionContext(options, command);
+      const context = await createBrowserContext(options, command);
       if (!context) {
         process.exitCode = 1;
         return;
@@ -232,7 +185,7 @@ export function registerVideosCommand(program: Command): void {
       }
 
       // Need browser only for getting viewId and duration (not needed for dry-run)
-      const context = await createSessionContext(options, command);
+      const context = await createBrowserContext(options, command);
       if (!context) {
         process.exitCode = 1;
         return;
@@ -291,7 +244,7 @@ export function registerVideosCommand(program: Command): void {
     .option("--output-dir <path>", "Output directory", "./downloads/videos")
     .option("--incomplete-only", "Download only incomplete videos")
     .action(async (courseId, options, command) => {
-      const context = await createSessionContext(options, command);
+      const context = await createBrowserContext(options, command);
       if (!context) {
         process.exitCode = 1;
         return;
@@ -340,18 +293,20 @@ export function registerVideosCommand(program: Command): void {
         const failed = downloaded.filter(d => !d.success).length;
         log.info(`\n執行結果: ${completed} 成功, ${failed} 失敗`);
 
-        console.log(JSON.stringify({
-          status: "success",
-          timestamp: new Date().toISOString(),
-          course_id: courseId,
-          output_dir: outputDir,
-          total_videos: videos.length,
-          downloaded: completed,
-          failed,
-        }));
-        for (const v of downloaded) {
-          console.log(JSON.stringify(v));
-        }
+        formatAndOutput(
+          downloaded as unknown as Record<string, unknown>[],
+          "json",
+          log,
+          {
+            status: "success",
+            timestamp: new Date().toISOString(),
+            course_id: courseId,
+            output_dir: outputDir,
+            total_videos: videos.length,
+            downloaded: completed,
+            failed,
+          }
+        );
       } finally {
         await closeBrowserSafely(browser, browserContext);
       }

@@ -1,20 +1,9 @@
-import { formatTimestamp } from "../lib/utils.ts";
+import { getOutputFormat, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
+import type { OutputFormat } from "../lib/types.ts";
 import { getSiteInfoApi, getMessagesApi, getDiscussionPostsApi } from "../lib/moodle.ts";
 import { createApiContext } from "../lib/auth.ts";
-
-interface AnnouncementWithCourse {
-  course_id: number;
-  course_name: string;
-  id: number;
-  subject: string;
-  author: string;
-  authorId: number;
-  createdAt: number;
-  modifiedAt: number;
-  unread?: boolean;
-  forumId: number;
-}
+import { formatAndOutput } from "../index.ts";
 
 export function registerAnnouncementsCommand(program: Command): void {
   const announcementsCmd = program.command("announcements");
@@ -28,6 +17,7 @@ export function registerAnnouncementsCommand(program: Command): void {
     .option("--limit <n>", "Maximum number of announcements to show", "20")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
       const limit = parseInt(options.limit, 10);
       const apiContext = await createApiContext(options, command);
       if (!apiContext) {
@@ -41,43 +31,28 @@ export function registerAnnouncementsCommand(program: Command): void {
         limitnum: limit,
       });
 
-      const allAnnouncements: AnnouncementWithCourse[] = messages.map(m => ({
-        course_id: 0, // Messages don't have courseId
+      const allAnnouncements = messages.map(m => ({
+        course_id: 0,
         course_name: "Notifications",
         id: m.id,
         subject: m.subject,
         author: `User ${m.useridfrom}`,
-        authorId: m.useridfrom,
-        createdAt: m.timecreated,
-        modifiedAt: m.timecreated,
-        unread: false, // Messages API doesn't provide unread status
-        forumId: 0,
+        author_id: m.useridfrom,
+        created_at: formatTimestamp(m.timecreated),
+        modified_at: formatTimestamp(m.timecreated),
+        unread: false,
       }));
 
-      allAnnouncements.sort((a, b) => b.createdAt - a.createdAt);
+      allAnnouncements.sort((a, b) => (b as any).created_at > (a as any).created_at ? 1 : -1);
 
-      let filteredAnnouncements = allAnnouncements.slice(0, limit);
+      const shown = allAnnouncements.slice(0, limit);
 
-      console.log(JSON.stringify({
-        status: "success",
-        timestamp: new Date().toISOString(),
-        level: options.level,
-        total_announcements: allAnnouncements.length,
-        shown: filteredAnnouncements.length,
-      }));
-      for (const a of filteredAnnouncements) {
-        console.log(JSON.stringify({
-          course_id: a.course_id,
-          course_name: a.course_name,
-          id: a.id,
-          subject: a.subject,
-          author: a.author,
-          author_id: a.authorId,
-          created_at: formatTimestamp(a.createdAt),
-          modified_at: formatTimestamp(a.modifiedAt),
-          unread: a.unread,
-        }));
-      }
+      formatAndOutput(
+        shown as unknown as Record<string, unknown>[],
+        output,
+        apiContext.log,
+        { status: "success", timestamp: new Date().toISOString(), total_announcements: allAnnouncements.length, shown: shown.length }
+      );
     });
 
   announcementsCmd
@@ -86,6 +61,7 @@ export function registerAnnouncementsCommand(program: Command): void {
     .argument("<announcement-id>", "Discussion ID of the announcement")
     .option("--output <format>", "Output format: json|csv|table|silent")
     .action(async (announcementId, options, command) => {
+      const output: OutputFormat = getOutputFormat(command);
       const apiContext = await createApiContext(options, command);
       if (!apiContext) {
         process.exitCode = 1;
@@ -102,10 +78,8 @@ export function registerAnnouncementsCommand(program: Command): void {
 
       const firstPost = posts[0];
 
-      const output = {
-        status: "success",
-        timestamp: new Date().toISOString(),
-        announcement: {
+      formatAndOutput(
+        {
           id: announcementId,
           subject: firstPost.subject,
           author: firstPost.author,
@@ -113,8 +87,9 @@ export function registerAnnouncementsCommand(program: Command): void {
           created_at: formatTimestamp(firstPost.created),
           modified_at: formatTimestamp(firstPost.modified),
           message: firstPost.message,
-        },
-      };
-      console.log(JSON.stringify(output));
+        } as unknown as Record<string, unknown>,
+        output,
+        apiContext.log
+      );
     });
 }
