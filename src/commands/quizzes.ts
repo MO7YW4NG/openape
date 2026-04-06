@@ -1,4 +1,4 @@
-import { formatTimestamp } from "../lib/utils.ts";
+import { formatTimestamp, getOutputFormat } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { OutputFormat } from "../lib/types.ts";
 import {
@@ -72,11 +72,6 @@ function parseQuizQuestions(questions: Record<number, any>) {
 export function registerQuizzesCommand(program: Command): void {
   const quizzesCmd = program.command("quizzes");
   quizzesCmd.description("Quiz operations");
-
-  function getOutputFormat(command: any): OutputFormat {
-    const opts = command.optsWithGlobals();
-    return (opts.output as OutputFormat) || "json";
-  }
 
   quizzesCmd
     .command("list")

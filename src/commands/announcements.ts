@@ -35,15 +35,12 @@ export function registerAnnouncementsCommand(program: Command): void {
         return;
       }
 
-      // Get site info to retrieve userid
       const siteInfo = await getSiteInfoApi(apiContext.session);
 
-      // Get messages for the current user
       const messages = await getMessagesApi(apiContext.session, siteInfo.userid, {
         limitnum: limit,
       });
 
-      // Convert messages to announcement format
       const allAnnouncements: AnnouncementWithCourse[] = messages.map(m => ({
         course_id: 0, // Messages don't have courseId
         course_name: "Notifications",
@@ -57,10 +54,8 @@ export function registerAnnouncementsCommand(program: Command): void {
         forumId: 0,
       }));
 
-      // Sort by created date (newest first)
       allAnnouncements.sort((a, b) => b.createdAt - a.createdAt);
 
-      // Apply limit
       let filteredAnnouncements = allAnnouncements.slice(0, limit);
 
       console.log(JSON.stringify({

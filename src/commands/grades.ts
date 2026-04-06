@@ -3,6 +3,7 @@ import type { OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi, getCourseGradesApi } from "../lib/moodle.ts";
 import { createApiContext } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
+import { getOutputFormat } from "../lib/utils.ts";
 
 interface GradeSummary {
   courseId: number;
@@ -16,11 +17,6 @@ interface GradeSummary {
 export function registerGradesCommand(program: Command): void {
   const gradesCmd = program.command("grades");
   gradesCmd.description("Grade operations");
-
-  function getOutputFormat(command: any): OutputFormat {
-    const opts = command.optsWithGlobals();
-    return (opts.output as OutputFormat) || "json";
-  }
 
   gradesCmd
     .command("summary")
@@ -36,9 +32,17 @@ export function registerGradesCommand(program: Command): void {
 
       const courses = await getEnrolledCoursesApi(apiContext.session);
 
+      const gradeResults = await Promise.allSettled(
+        courses.map(course =>
+          getCourseGradesApi(apiContext.session, course.id)
+            .then(grades => ({ course, grades }))
+        )
+      );
+
       const gradeSummaries: GradeSummary[] = [];
-      for (const course of courses) {
-        const grades = await getCourseGradesApi(apiContext.session, course.id);
+      for (const result of gradeResults) {
+        if (result.status !== "fulfilled") continue;
+        const { course, grades } = result.value;
         gradeSummaries.push({
           courseId: course.id,
           courseName: course.fullname,

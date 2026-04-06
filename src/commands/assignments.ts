@@ -1,6 +1,6 @@
-import { getOutputFormat, getSessionPath, formatFileSize, formatMoodleDate } from "../lib/utils.ts";
+import { getOutputFormat, formatFileSize, formatMoodleDate } from "../lib/utils.ts";
 import { Command } from "commander";
-import type { Logger, OutputFormat } from "../lib/types.ts";
+import type { OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi, getAssignmentsByCoursesApi, getSubmissionStatusApi, saveSubmissionApi, uploadFileApi } from "../lib/moodle.ts";
 import { createApiContext } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
@@ -197,9 +197,9 @@ export function registerAssignmentsCommand(program: Command): void {
       if (options.file) {
         const resolvedPath = path.resolve(options.file);
 
-        // Check if file exists
+        let stats;
         try {
-          await fs.access(resolvedPath);
+          stats = await fs.stat(resolvedPath);
         } catch {
           const errorResult = {
             success: false,
@@ -210,7 +210,6 @@ export function registerAssignmentsCommand(program: Command): void {
           return;
         }
 
-        const stats = await fs.stat(resolvedPath);
         const fileSizeKB = formatFileSize(stats.size);
 
         const uploadResult = await uploadFileApi(apiContext.session, resolvedPath);

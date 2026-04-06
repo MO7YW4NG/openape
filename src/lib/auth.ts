@@ -3,6 +3,8 @@ import path from "node:path";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright-core";
 import type { AppConfig, Logger, OutputFormat } from "./types.ts";
 import { acquireWsToken, loadWsToken, saveWsToken } from "./token.ts";
+import { createLogger } from "./logger.ts";
+import { getOutputFormat, getSessionPath } from "./utils.ts";
 
 /**
  * Find a Chromium-based browser executable on Windows, macOS, or Linux.
@@ -300,23 +302,12 @@ export async function createApiContext(
   log: Logger;
   session: { wsToken: string; moodleBaseUrl: string };
 } | null> {
-  const { createLogger } = await import("./logger.ts");
-  const { loadWsToken } = await import("./token.ts");
-  const { getOutputFormat, getSessionPath } = await import("./utils.ts");
-  const { existsSync } = await import("node:fs");
-
   const opts = command?.optsWithGlobals ? command.optsWithGlobals() : options;
   const outputFormat = command ? getOutputFormat(command) : "json";
   const silent = outputFormat === "json" && !opts.verbose;
   const log = createLogger(opts.verbose, silent, outputFormat);
 
   const sessionPath = getSessionPath();
-
-  if (!existsSync(sessionPath)) {
-    log.error("未找到登入 session。請先執行 'openape login' 進行登入。");
-    return null;
-  }
-
   const wsToken = loadWsToken(sessionPath);
   if (!wsToken) {
     log.error("未找到 WS token。請先執行 'openape login' 進行登入。");

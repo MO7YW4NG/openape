@@ -1,6 +1,6 @@
-import { getOutputFormat, getSessionPath, formatFileSize } from "../lib/utils.ts";
+import { getOutputFormat, formatFileSize } from "../lib/utils.ts";
 import { Command } from "commander";
-import type { Logger, OutputFormat } from "../lib/types.ts";
+import type { OutputFormat } from "../lib/types.ts";
 import { uploadFileApi } from "../lib/moodle.ts";
 import { createApiContext } from "../lib/auth.ts";
 import { formatAndOutput } from "../index.ts";
@@ -25,20 +25,17 @@ export function registerUploadCommand(program: Command): void {
         return;
       }
 
-      // Resolve file path
       const resolvedPath = path.resolve(filePath);
 
-      // Check if file exists
+      let stats;
       try {
-        await fs.access(resolvedPath);
+        stats = await fs.stat(resolvedPath);
       } catch {
         apiContext.log.error(`檔案不存在: ${filePath}`);
         process.exitCode = 1;
         return;
       }
 
-      // Get file size
-      const stats = await fs.stat(resolvedPath);
       const fileSizeKB = formatFileSize(stats.size);
       apiContext.log.info(`上傳檔案: ${path.basename(resolvedPath)} (${fileSizeKB} KB)`);
 

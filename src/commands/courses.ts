@@ -1,4 +1,4 @@
-import { stripHtmlTags, formatTimestamp } from "../lib/utils.ts";
+import { stripHtmlTags, getOutputFormat, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { OutputFormat } from "../lib/types.ts";
 import { getEnrolledCoursesApi } from "../lib/moodle.ts";
@@ -8,12 +8,6 @@ import { formatAndOutput } from "../index.ts";
 export function registerCoursesCommand(program: Command): void {
   const coursesCmd = program.command("courses");
   coursesCmd.description("Course operations");
-
-  // Helper to get output format from global or local options
-  function getOutputFormat(command: any): OutputFormat {
-    const opts = command.optsWithGlobals();
-    return (opts.output as OutputFormat) || "json";
-  }
 
   coursesCmd
     .command("list")

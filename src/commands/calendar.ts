@@ -25,14 +25,12 @@ export function registerCalendarCommand(program: Command): void {
 
       const courses = await getEnrolledCoursesApi(apiContext.session);
 
-      // Calculate time range
       const now = Math.floor(Date.now() / 1000);
       const endTime = now + (days * 24 * 60 * 60);
 
       let allEvents = [];
 
       if (options.course) {
-        // Get events for specific course
         const courseId = parseInt(options.course, 10);
         const events = await getCalendarEventsApi(apiContext.session, {
           startTime: now,
@@ -40,25 +38,22 @@ export function registerCalendarCommand(program: Command): void {
         });
         allEvents = events.filter(e => e.courseid === courseId);
       } else {
-        // Get events for all courses
-        for (const course of courses) {
-          try {
-            const events = await getCalendarEventsApi(apiContext.session, {
+        const results = await Promise.allSettled(
+          courses.map(course =>
+            getCalendarEventsApi(apiContext.session, {
               courseId: course.id,
               startTime: now,
               endTime: endTime,
-            });
-            allEvents.push(...events);
-          } catch (err) {
-            apiContext.log.debug(`Failed to fetch calendar events for ${course.fullname}: ${err}`);
-          }
+            })
+          )
+        );
+        for (const result of results) {
+          if (result.status === "fulfilled") allEvents.push(...result.value);
         }
       }
 
-      // Sort by start time
       allEvents.sort((a, b) => a.timestart - b.timestart);
 
-      // Filter upcoming only if requested
       let filteredEvents = allEvents;
       if (options.upcoming) {
         filteredEvents = allEvents.filter(e => e.timestart > now);
@@ -102,30 +97,27 @@ export function registerCalendarCommand(program: Command): void {
 
       const courses = await getEnrolledCoursesApi(apiContext.session);
 
-      // Calculate time range
       const now = Math.floor(Date.now() / 1000);
       const days = parseInt(options.days, 10);
       const endTime = now + (days * 24 * 60 * 60);
 
       const allEvents = [];
 
-      for (const course of courses) {
-        try {
-          const events = await getCalendarEventsApi(apiContext.session, {
+      const results = await Promise.allSettled(
+        courses.map(course =>
+          getCalendarEventsApi(apiContext.session, {
             courseId: course.id,
             startTime: now,
             endTime: endTime,
-          });
-          allEvents.push(...events);
-        } catch (err) {
-          apiContext.log.debug(`Failed to fetch calendar events for ${course.fullname}: ${err}`);
-        }
+          })
+        )
+      );
+      for (const result of results) {
+        if (result.status === "fulfilled") allEvents.push(...result.value);
       }
 
-      // Sort by start time
       allEvents.sort((a, b) => a.timestart - b.timestart);
 
-      // Export data
       const exportData = {
         exported_at: new Date().toISOString(),
         time_range: {
@@ -152,7 +144,6 @@ export function registerCalendarCommand(program: Command): void {
         },
       };
 
-      // Write to file
       fs.writeFileSync(options.output, JSON.stringify(exportData));
 
       apiContext.log.success(`Exported ${allEvents.length} events to ${options.output}`);

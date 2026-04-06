@@ -34,7 +34,6 @@ export function registerForumsCommand(program: Command): void {
         classification: "inprogress",
       });
 
-      // Get forums via WS API (no browser needed!)
       const courseIds = courses.map(c => c.id);
       const wsForums = await getForumsApi(apiContext.session, courseIds);
 
@@ -50,7 +49,6 @@ export function registerForumsCommand(program: Command): void {
             forum_id: wsForum.id,
             name: wsForum.name,
             timemodified: wsForum.timemodified,
-            // url: `https://ilearning.cycu.edu.tw/mod/forum/view.php?id=${wsForum.cmid}`,
           });
         }
       }
@@ -83,7 +81,6 @@ export function registerForumsCommand(program: Command): void {
         classification,
       });
 
-      // Get forums via WS API (no browser needed!)
       const courseIds = courses.map(c => c.id);
       const wsForums = await getForumsApi(apiContext.session, courseIds);
 
@@ -126,16 +123,13 @@ export function registerForumsCommand(program: Command): void {
         return;
       }
 
-      // Get courses via WS API
       const courses = await getEnrolledCoursesApi(apiContext.session, {
         classification: "inprogress",
       });
 
-      // Get forums via WS API
       const courseIds = courses.map(c => c.id);
       const wsForums = await getForumsApi(apiContext.session, courseIds);
 
-      // Find forum by cmid or instance ID
       const targetForum = wsForums.find(
         f => f.cmid.toString() === forumId || f.id === parseInt(forumId, 10)
       );
@@ -148,10 +142,8 @@ export function registerForumsCommand(program: Command): void {
 
       const course = courses.find(c => c.id === targetForum.courseid);
 
-      // Get discussions via WS API
       const discussions = await getForumDiscussionsApi(apiContext.session, targetForum.id);
 
-      // Output NDJSON: one line per discussion entry for stream-friendly parsing
       const meta = {
         status: "success",
         timestamp: new Date().toISOString(),
@@ -241,7 +233,6 @@ export function registerForumsCommand(program: Command): void {
 
       const { log, session } = apiContext;
 
-      // Get courses to find the forum
       const courses = await getEnrolledCoursesApi(session, {
         classification: "inprogress",
       });
@@ -249,7 +240,6 @@ export function registerForumsCommand(program: Command): void {
       const courseIds = courses.map(c => c.id);
       const wsForums = await getForumsApi(session, courseIds);
 
-      // Find forum by cmid or instance ID
       const targetForum = wsForums.find(
         f => f.cmid.toString() === forumId || f.id === parseInt(forumId, 10)
       );
