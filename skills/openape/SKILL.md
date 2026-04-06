@@ -71,12 +71,12 @@ openape <command> [subcommand] [args] [flags]
 
 ### forums — Forum operations
 
-  - `list` — List forums from in-progress courses. Flags: `--level in_progress|all`
-  - `list-all` — List all forums across all courses
+  - `list` — List forums from in-progress courses
+  - `list-all` — List all forums across all courses. Flags: `--level in_progress|all`
   - `discussions <forum-id>` — List discussions in a forum
   - `posts <discussion-id>` — Show posts in a discussion
   - `post <forum-id> <subject> <message>` — Post a new discussion. Flags: `--subscribe`, `--pin`
-  - `reply <post-id> <subject> <message>` — Reply to a discussion post. Flags: `--parent-id <id>`
+  - `reply <post-id> <subject> <message>` — Reply to a discussion post. Flags: `--attachment-id <id>`, `--inline-attachment-id <id>`
   - `delete <post-id>` — Delete a forum post or discussion
 
 ### announcements — Announcement operations
@@ -86,8 +86,8 @@ openape <command> [subcommand] [args] [flags]
 
 ### calendar — Calendar operations
 
-  - `events` — List calendar events. Flags: `--course-id <id>`, `--events-after <date>`, `--events-before <date>`
-  - `export` — Export calendar events to file. Flags: `--format json|ics`, `--output <file>`
+  - `events` — List calendar events. Flags: `--course <id>`, `--upcoming`, `--days <n>`
+  - `export` — Export calendar events to file. Flags: `--output <path>`, `--days <n>`
 
 ### upload — File upload
 
@@ -100,7 +100,7 @@ openape <command> [subcommand] [args] [flags]
 
 ## Output Formats
 
-All commands support `--output`: `json` (default), `csv`, `table`, `silent`
+Most data commands support `--output`: `json` (default), `csv`, `table`, `silent`
 
 Global flags: `--verbose`, `--headed`, `--session <path>`
 

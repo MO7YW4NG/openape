@@ -56,8 +56,8 @@ openape courses syllabus <id>      # 顯示課程大綱
 ```bash
 openape videos list <course-id>      # 列出課程中的影片
 openape videos complete <id>         # 標記特定影片為已觀看
-openape videos complete-all <id>     # 影片批次完成
-openape videos download <id>         # 下載影片
+openape videos complete-all            # 影片批次完成
+openape videos download <id>         # 下載影片 (支援 --output-dir)
 ```
 
 ### 測驗與教材 (Quizzes & Materials)
@@ -68,8 +68,8 @@ openape quizzes start <quiz-id>      # 開始測驗
 openape quizzes info <attempt-id>    # 查看測驗題目
 openape quizzes save <attempt-id> '<answers>' # 儲存測驗答案
 openape materials list-all           # 列出所有可下載教材
-openape materials download <id>      # 下載指定教材
-openape materials download-all       # 批次下載教材
+openape materials download <id>      # 下載指定教材 (支援 --output-dir)
+openape materials download-all       # 批次下載教材 (支援 --output-dir, --level)
 openape materials complete <id>      # 標記教材為已完成
 openape materials complete-all       # 批次標記教材為已完成
 ```
@@ -82,13 +82,13 @@ openape forums list                  # 列出進行中課程的討論區
 openape forums list-all              # 列出所有討論區
 openape forums discussions <forum-id>      # 列出討論區中的討論串
 openape forums posts <discussion-id>       # 列出討論串中的貼文
-openape forums reply <post-id> <subject> <message>  # 回覆貼文
+openape forums reply <post-id> <subject> <message>  # 回覆貼文 (支援 --attachment-id)
 openape forums post <forum-id> <subject> <message>  # 發起新討論
 openape forums delete <post-id>      # 刪除討論貼文
 openape announcements list-all       # 列出所有公告
 openape announcements read <id>      # 閱讀特定公告
-openape calendar events              # 查詢行事曆事件
-openape calendar export              # 匯出事件
+openape calendar events              # 查詢行事曆事件 (支援 --upcoming, --days, --course)
+openape calendar export              # 匯出事件 (支援 --output, --days)
 ```
 
 ### 作業與檔案上傳 (Assignments & Upload)
