@@ -1,0 +1,31 @@
+{
+  "name": "@mo7yw4ng/openape",
+  "version": "2.0.0",
+  "description": "CLI tool for CYCU i-Learning platform",
+  "bin": {
+    "openape": "bin/openape"
+  },
+  "scripts": {
+    "build": "tsc && npx shx mv bin/index.js bin/openape"
+  },
+  "optionalDependencies": {
+    "@mo7yw4ng/openape-linux-x64": "2.0.0",
+    "@mo7yw4ng/openape-linux-arm64": "2.0.0",
+    "@mo7yw4ng/openape-darwin-x64": "2.0.0",
+    "@mo7yw4ng/openape-darwin-arm64": "2.0.0",
+    "@mo7yw4ng/openape-win32-x64": "2.0.0",
+    "@mo7yw4ng/openape-win32-arm64": "2.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0",
+    "@types/node": "^20.0.0"
+  },
+  "files": [
+    "bin/"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/MO7YW4NG/openape"
+  },
+  "license": "MIT"
+}

@@ -1,0 +1,8 @@
+{
+  "name": "@openape/openape",
+  "version": "2.0.0",
+  "exports": "./bin/openape",
+  "publish": {
+    "include": ["bin/"]
+  }
+}
