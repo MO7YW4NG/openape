@@ -45,7 +45,7 @@ export function stripHtmlTags(html: string): string {
 /**
  * Extract clean course name from Moodle fullname.
  * Removes mlang tags, course codes, and instructor info.
- * Example: "{mlang zh-tw}1142爵士樂賞析(遠距)-楊曊恩..." -> "爵士樂賞析"
+ * Example: "{mlang zh-tw}1142Jazz Analysis(Distance)-Instructor..." -> "Jazz Analysis"
  */
 export function extractCourseName(fullname: string): string {
   if (!fullname) return "";
@@ -63,14 +63,6 @@ export function extractCourseName(fullname: string): string {
 export function getOutputFormat(command: { optsWithGlobals(): { output?: OutputFormat } }): OutputFormat {
   const opts = command.optsWithGlobals();
   return (opts.output as OutputFormat) || "json";
-}
-
-/**
- * Determine if logs should be silenced based on output format and verbosity.
- * JSON output without verbose flag silences logs.
- */
-export function shouldSilenceLogs(outputFormat: OutputFormat, verbose?: boolean): boolean {
-  return outputFormat === "json" && !verbose;
 }
 
 /**
@@ -108,7 +100,7 @@ export function formatMoodleDate(timestamp?: number): string {
 }
 
 /**
- * 統一時間戳記轉換 (預設：本地時間字串)
+ * Unified timestamp conversion (default: local time string)
  */
 export function formatTimestamp(timestamp: number | undefined | null, format: "iso" | "local" | "relative" = "local"): string {
   if (!timestamp || timestamp === 0) return "無期限";
@@ -121,7 +113,7 @@ export function formatTimestamp(timestamp: number | undefined | null, format: "i
 }
 
 /**
- * 相對時間格式 (e.g., "2 hours ago")
+ * Relative time format (e.g., "2 hours ago")
  */
 export function formatRelativeTime(timestamp: number): string {
   const seconds = Math.floor(Date.now() / 1000) - timestamp;
