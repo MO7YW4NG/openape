@@ -49,21 +49,15 @@ export function registerGradesCommand(program: Command): void {
         });
       }
 
-      // Calculate overall statistics
       const gradedCourses = gradeSummaries.filter(g => g.grade !== undefined && g.grade !== null && g.grade !== "-");
       const averageRank = gradeSummaries
         .filter(g => g.rank !== undefined && g.rank !== null)
         .reduce((sum, g) => sum + (g.rank || 0), 0) /
         (gradeSummaries.filter(g => g.rank !== undefined && g.rank !== null).length || 1);
 
-      const summaryData = {
-        total_courses: courses.length,
-        graded_courses: gradedCourses.length,
-        average_rank: averageRank.toFixed(1),
-        grades: gradeSummaries,
-      };
+      apiContext.log.info(`Total: ${courses.length} courses, ${gradedCourses.length} graded, avg rank: ${averageRank.toFixed(1)}`);
 
-      formatAndOutput(summaryData as unknown as Record<string, unknown>, output, apiContext.log);
+      formatAndOutput(gradeSummaries as unknown as Record<string, unknown>[], output, apiContext.log);
     });
 
   gradesCmd
