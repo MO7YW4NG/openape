@@ -1,20 +1,17 @@
+use comfy_table::{Table, ContentArrangement, presets::NOTHING};
 use crate::OutputFormat;
 
 /// Format and output data in the specified format.
 pub fn format_and_output(
     data: &[serde_json::Value],
     format: OutputFormat,
-    meta: Option<&serde_json::Value>,
+    _meta: Option<&serde_json::Value>,
 ) {
     match format {
         OutputFormat::Json => {
-            if let Some(m) = meta {
-                println!("{}", serde_json::to_string(m).unwrap());
-            }
             for item in data {
                 println!("{}", serde_json::to_string(item).unwrap());
             }
-            std::process::exit(0);
         }
         OutputFormat::Csv => {
             if data.is_empty() {
@@ -35,23 +32,30 @@ pub fn format_and_output(
 
 /// Format data as CSV string.
 pub fn format_as_csv(data: &[serde_json::Value]) -> String {
-    let fields: Vec<String> = data[0]
-        .as_object()
-        .map(|o| o.keys().cloned().collect())
-        .unwrap_or_default();
+    let mut all_fields: Vec<String> = data
+        .iter()
+        .filter_map(|item| item.as_object())
+        .flat_map(|o| o.keys().cloned().collect::<Vec<_>>())
+        .collect();
+    all_fields.sort();
+    all_fields.dedup();
 
     let mut rows = Vec::new();
-    rows.push(fields.join(","));
+    rows.push(all_fields.join(","));
 
     for item in data {
-        let row: Vec<String> = fields
+        let row: Vec<String> = all_fields
             .iter()
             .map(|f| {
                 let val = item.get(f);
                 match val {
                     None | Some(serde_json::Value::Null) => String::new(),
                     Some(v) => {
-                        let s = v.to_string().trim_matches('"').to_string();
+                        let s = match v {
+                            serde_json::Value::String(s) => s.clone(),
+                            other => other.to_string(),
+                        };
+                        let s = s.trim_matches('"').to_string();
                         if s.contains(',') || s.contains('"') || s.contains('\n') {
                             format!("\"{}\"", s.replace('"', "\"\""))
                         } else {
@@ -69,68 +73,36 @@ pub fn format_as_csv(data: &[serde_json::Value]) -> String {
 
 /// Format data as ASCII table.
 pub fn format_as_table(data: &[serde_json::Value]) -> String {
-    let all_fields: Vec<String> = {
-        let mut set: Vec<String> = data
-            .iter()
-            .filter_map(|item| item.as_object())
-            .flat_map(|o| o.keys().cloned().collect::<Vec<_>>())
-            .collect();
-        set.sort();
-        set.dedup();
-        set
-    };
+    let mut all_fields: Vec<String> = data
+        .iter()
+        .filter_map(|item| item.as_object())
+        .flat_map(|o| o.keys().cloned().collect::<Vec<_>>())
+        .collect();
+    all_fields.sort();
+    all_fields.dedup();
 
-    // Calculate column widths
-    let mut widths: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for field in &all_fields {
-        let mut w = field.len() + 2;
-        for item in data {
-            let val = item
-                .get(field)
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
-            w = w.max(val.len() + 2);
+    let mut table = Table::new();
+    table
+        .load_preset(NOTHING)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_width(140) 
+        .set_header(all_fields.iter().map(|f| f.to_uppercase()));
+
+    for item in data {
+        let mut row = Vec::new();
+        for field in &all_fields {
+            let val = item.get(field);
+            let s = match val {
+                None | Some(serde_json::Value::Null) => String::new(),
+                Some(serde_json::Value::String(s)) => s.clone(),
+                Some(serde_json::Value::Number(n)) => n.to_string(),
+                Some(serde_json::Value::Bool(b)) => b.to_string(),
+                Some(v) => v.to_string(),
+            };
+            row.push(s);
         }
-        widths.insert(field.clone(), w);
+        table.add_row(row);
     }
 
-    let header: String = all_fields
-        .iter()
-        .map(|f| {
-            let w = widths.get(f).copied().unwrap_or(f.len() + 2);
-            format!("{:width$}", f, width = w)
-        })
-        .collect::<Vec<_>>()
-        .join(" | ");
-
-    let separator: String = all_fields
-        .iter()
-        .map(|f| {
-            let w = widths.get(f).copied().unwrap_or(f.len() + 2);
-            "-".repeat(w - 1)
-        })
-        .collect::<Vec<_>>()
-        .join("-+-");
-
-    let rows: Vec<String> = data
-        .iter()
-        .map(|item| {
-            all_fields
-                .iter()
-                .map(|f| {
-                    let w = widths.get(f).copied().unwrap_or(f.len() + 2);
-                    let val = item
-                        .get(f)
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-                    format!("{:width$}", val, width = w)
-                })
-                .collect::<Vec<_>>()
-                .join(" | ")
-        })
-        .collect();
-
-    let mut lines = vec![header, separator];
-    lines.extend(rows);
-    lines.join("\n")
+    table.to_string()
 }

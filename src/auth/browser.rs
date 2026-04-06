@@ -1,6 +1,7 @@
 //! Playwright browser lifecycle management.
 
 use playwright_rs::{Playwright, Browser, BrowserContext, Page, LaunchOptions};
+use playwright_rs::protocol::Cookie;
 use std::path::Path;
 
 /// Result of launching an authenticated session.
@@ -98,4 +99,28 @@ pub async fn close_browser(launched: LaunchedBrowser) {
     let LaunchedBrowser { browser, context, .. } = launched;
     let _ = context.close().await;
     let _ = browser.close().await;
+}
+
+/// Convert Playwright cookies to a Cookie header string for HTTP requests.
+pub fn cookies_to_cookie_header(cookies: &[Cookie], target_url: &str) -> String {
+    let is_https = target_url.starts_with("https://");
+    // Extract host from URL (simple parse, no extra dependency)
+    let host = target_url
+        .strip_prefix("https://").or_else(|| target_url.strip_prefix("http://"))
+        .and_then(|rest| rest.split('/').next())
+        .unwrap_or("");
+
+    cookies
+        .iter()
+        .filter(|c| {
+            let cookie_domain = c.domain.trim_start_matches('.');
+            host.ends_with(cookie_domain) || host == cookie_domain
+        })
+        .filter(|c| {
+            if c.secure && !is_https { return false; }
+            true
+        })
+        .map(|c| format!("{}={}", c.name, c.value))
+        .collect::<Vec<_>>()
+        .join("; ")
 }

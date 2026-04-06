@@ -4,6 +4,7 @@ mod browser;
 mod token;
 
 use browser::{close_browser, find_browser_path, launch_playwright};
+pub use browser::cookies_to_cookie_header;
 use token::{extract_token_from_custom_scheme, SessionMeta};
 
 use std::path::Path;
@@ -67,8 +68,16 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
 
     perform_login(&launched.page, &config.moodle_base_url, log).await?;
 
-    // Save session via persistent context (cookies are preserved automatically)
-    log.debug(&format!("Session saved to {}", user_data_dir));
+    // Save session storage state for future use (persistent context + download)
+    if let Ok(state) = launched.context.storage_state().await {
+        if let Ok(json) = serde_json::to_string_pretty(&state) {
+            if let Some(parent) = Path::new(&config.auth_state_path).parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&config.auth_state_path, json);
+            log.debug(&format!("Session saved to {}", config.auth_state_path));
+        }
+    }
 
     // Acquire WS token
     if ws_token.is_none() {
@@ -273,6 +282,94 @@ pub fn logout(config: &AppConfig) {
     if meta_path.exists() {
         let _ = std::fs::remove_file(meta_path);
     }
+}
+
+/// Launch a headless persistent browser context using saved session data.
+/// Returns (Playwright, BrowserContext). No interactive login — errors if no saved session.
+pub async fn launch_persistent_session(config: &AppConfig, log: &Logger) -> anyhow::Result<(Playwright, playwright_rs::BrowserContext)> {
+    let user_data_dir = get_user_data_dir(&config.auth_state_path);
+    let storage_state_path = &config.auth_state_path;
+
+    let has_persistent = Path::new(&user_data_dir).exists();
+    let has_storage_state = Path::new(storage_state_path).exists();
+
+    if !has_persistent && !has_storage_state {
+        anyhow::bail!("No browser session found. Run `openape login` first.");
+    }
+
+    let exe_path = find_browser_path()?;
+    log.debug(&format!("Using browser: {}", exe_path));
+
+    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+
+    let playwright = Playwright::launch()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to launch Playwright: {}", e))?;
+
+    let context = if has_persistent {
+        // Method 1: Persistent context (cookies in browser-data/ directory)
+        playwright
+            .chromium()
+            .launch_persistent_context(&user_data_dir)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to launch persistent context: {}", e))?
+    } else {
+        // Method 2: Launch browser + context with storage-state.json
+        let launch_opts = playwright_rs::LaunchOptions::new()
+            .headless(true)
+            .executable_path(exe_path.to_string());
+
+        let browser = playwright
+            .chromium()
+            .launch_with_options(launch_opts)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to launch browser: {}", e))?;
+
+        let ctx_opts = playwright_rs::BrowserContextOptions::builder()
+            .storage_state_path(storage_state_path.to_string())
+            .build();
+
+        let ctx = browser
+            .new_context_with_options(ctx_opts)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to create context: {}", e))?;
+
+        ctx
+    };
+
+    // Validate session
+    let pages = context.pages();
+    let page = if !pages.is_empty() {
+        pages[0].clone()
+    } else {
+        context.new_page().await
+            .map_err(|e| anyhow::anyhow!("Failed to create page: {}", e))?
+    };
+
+    let check_url = format!("{}/my/", config.moodle_base_url);
+    let result = page.goto(&check_url, None).await;
+
+    match result {
+        Ok(Some(_)) => {
+            let url = page.url();
+            if url.contains("login") || url.contains("microsoftonline") {
+                let _ = context.close().await;
+                anyhow::bail!("Browser session expired. Run `openape login` to re-authenticate.");
+            }
+        }
+        _ => {
+            let _ = context.close().await;
+            anyhow::bail!("Failed to verify session. Run `openape login` first.");
+        }
+    }
+
+    log.info("Browser session restored.");
+    Ok((playwright, context))
+}
+
+/// Close a persistent browser context. Playwright is dropped automatically.
+pub async fn close_persistent_session(context: playwright_rs::BrowserContext) {
+    let _ = context.close().await;
 }
 
 /// Get the user data directory path from the auth state path.
