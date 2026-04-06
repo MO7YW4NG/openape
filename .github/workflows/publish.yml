@@ -5,6 +5,10 @@ on:
     types: [published]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  id-token: write
+
 jobs:
   build-and-publish-platform:
     name: ${{ matrix.node_pkg }}
@@ -13,12 +17,12 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             node_os: linux
             node_arch: x64
             node_pkg: openape-linux-x64
-          - os: ubuntu-20.04
+          - os: ubuntu-latest
             target: aarch64-unknown-linux-gnu
             node_os: linux
             node_arch: arm64
@@ -82,7 +86,7 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
+          node-version: '24.x'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Prepare platform package
@@ -132,18 +136,35 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: '20.x'
+          node-version: '24.x'
           registry-url: 'https://registry.npmjs.org'
 
       - name: Update version in package.json
         working-directory: npm/app
+        env:
+          node_version: ${{ steps.version.outputs.version }}
         run: |
-          VERSION=${{ steps.version.outputs.version }}
-          npm version $VERSION --no-git-tag-version
-          # Update jsr.json
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/" jsr.json
-          # Update platform dependencies in package.json
-          sed -i "s/\"@mo7yw4ng\/openape-\(.*\)\": \".*\"/\"@mo7yw4ng\/openape-\1\": \"$VERSION\"/g" package.json
+          node -e "
+            const fs = require('fs');
+            const version = process.env.node_version;
+            
+            // Update package.json
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = version;
+            if (pkg.optionalDependencies) {
+              for (const dep in pkg.optionalDependencies) {
+                if (dep.startsWith('@mo7yw4ng/openape-')) {
+                  pkg.optionalDependencies[dep] = version;
+                }
+              }
+            }
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            
+            // Update jsr.json
+            const jsr = JSON.parse(fs.readFileSync('jsr.json', 'utf8'));
+            jsr.version = version;
+            fs.writeFileSync('jsr.json', JSON.stringify(jsr, null, 2) + '\n');
+          "
 
       - name: Install dependencies & build
         working-directory: npm/app
