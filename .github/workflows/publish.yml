@@ -97,10 +97,20 @@ jobs:
           node_os: ${{ matrix.node_os }}
           node_arch: ${{ matrix.node_arch }}
         run: |
-          mkdir -p "npm/${{ matrix.node_pkg }}/bin"
           mkdir -p "npm/${{ matrix.node_pkg }}/bin/skills/openape"
-          envsubst < npm/package.json.tmpl > "npm/${{ matrix.node_pkg }}/package.json"
-          envsubst < npm/jsr.json.tmpl > "npm/${{ matrix.node_pkg }}/jsr.json"
+          node -e "
+            const fs = require('fs');
+            const replace = (path, out) => {
+              let content = fs.readFileSync(path, 'utf8');
+              content = content.replace(/\${node_pkg}/g, process.env.node_pkg)
+                               .replace(/\${node_version}/g, process.env.node_version)
+                               .replace(/\${node_os}/g, process.env.node_os)
+                               .replace(/\${node_arch}/g, process.env.node_arch);
+              fs.writeFileSync(out, content);
+            };
+            replace('npm/package.json.tmpl', 'npm/${{ matrix.node_pkg }}/package.json');
+            replace('npm/jsr.json.tmpl', 'npm/${{ matrix.node_pkg }}/jsr.json');
+          "
           cp skills/openape/SKILL.md "npm/${{ matrix.node_pkg }}/bin/skills/openape/SKILL.md"
           if [[ "${{ matrix.node_os }}" == "win32" ]]; then
             cp "target/${{ matrix.target }}/release/openape.exe" "npm/${{ matrix.node_pkg }}/bin/openape.exe"
