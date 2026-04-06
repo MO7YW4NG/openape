@@ -366,6 +366,51 @@ export async function getForumsApi(
 }
 
 /**
+ * Resolve a forum ID (cmid or instance ID) to a forum instance ID.
+ * First tries the ID as a forum instance ID via a lightweight discussions call.
+ * Falls back to resolving via core_course_get_course_module (for cmid).
+ */
+export async function resolveForumId(
+  session: { wsToken: string; moodleBaseUrl: string },
+  id: string
+): Promise<{ forumId: number; cmid?: number; name?: string; courseid?: number } | null> {
+  const numId = parseInt(id, 10);
+
+  // Try as forum instance ID first (most common case)
+  try {
+    await moodleApiCall<{ discussions?: unknown[] }>(
+      session,
+      "mod_forum_get_forum_discussions",
+      { forumid: numId, limit: 0 }
+    );
+    return { forumId: numId };
+  } catch {
+    // Not a valid forum instance ID, try as cmid
+  }
+
+  // Resolve cmid -> forum instance via core_course_get_course_module
+  try {
+    const cm = await moodleApiCall<{ cm: { instance: number; name: string; course: number; modname: string } }>(
+      session,
+      "core_course_get_course_module",
+      { cmid: numId }
+    );
+    if (cm?.cm && cm.cm.modname === "forum") {
+      return {
+        forumId: cm.cm.instance,
+        cmid: numId,
+        name: cm.cm.name,
+        courseid: cm.cm.course,
+      };
+    }
+  } catch {
+    // cmid resolution failed
+  }
+
+  return null;
+}
+
+/**
  * Get discussions in a forum via WS API (no browser required).
  * Uses mod_forum_get_forum_discussions
  */

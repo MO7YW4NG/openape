@@ -1,7 +1,7 @@
 import { stripHtmlTags, getOutputFormat, formatTimestamp } from "../lib/utils.ts";
 import { Command } from "commander";
 import type { OutputFormat } from "../lib/types.ts";
-import { getEnrolledCoursesApi, getForumsApi, getForumDiscussionsApi, getDiscussionPostsApi, addForumDiscussionApi, addForumPostApi, deleteForumPostApi } from "../lib/moodle.ts";
+import { getEnrolledCoursesApi, getForumsApi, getForumDiscussionsApi, getDiscussionPostsApi, addForumDiscussionApi, addForumPostApi, deleteForumPostApi, resolveForumId } from "../lib/moodle.ts";
 import { createApiContext } from "../lib/auth.ts";
 
 interface ForumWithCourse {
@@ -19,96 +19,60 @@ export function registerForumsCommand(program: Command): void {
   const forumsCmd = program.command("forums");
   forumsCmd.description("Forum operations");
 
+  async function listForums(classification?: "inprogress" | "past" | "future" | "all") {
+    const apiContext = await createApiContext({});
+    if (!apiContext) {
+      process.exitCode = 1;
+      return;
+    }
+
+    const courses = await getEnrolledCoursesApi(apiContext.session, {
+      classification,
+    });
+
+    const courseIds = courses.map(c => c.id);
+    const wsForums = await getForumsApi(apiContext.session, courseIds);
+
+    const courseMap = new Map(courses.map(c => [c.id, c]));
+    const allForums: ForumWithCourse[] = [];
+    for (const wsForum of wsForums) {
+      const course = courseMap.get(wsForum.courseid);
+      if (course) {
+        allForums.push({
+          course_id: wsForum.courseid,
+          course_name: course.fullname,
+          intro: wsForum.intro,
+          cmid: wsForum.cmid.toString(),
+          forum_id: wsForum.id,
+          name: wsForum.name,
+          timemodified: wsForum.timemodified,
+        });
+      }
+    }
+
+    console.log(JSON.stringify({
+      status: "success",
+      timestamp: new Date().toISOString(),
+      total_courses: courses.length,
+      total_forums: allForums.length,
+    }));
+    for (const forum of allForums) {
+      console.log(JSON.stringify(forum));
+    }
+  }
+
   forumsCmd
     .command("list")
     .description("List forums from in-progress courses")
-    .option("--output <format>", "Output format: json|csv|table|silent")
-    .action(async (options, command) => {
-      const apiContext = await createApiContext(options, command);
-      if (!apiContext) {
-        process.exitCode = 1;
-        return;
-      }
-
-      const courses = await getEnrolledCoursesApi(apiContext.session, {
-        classification: "inprogress",
-      });
-
-      const courseIds = courses.map(c => c.id);
-      const wsForums = await getForumsApi(apiContext.session, courseIds);
-
-      const allForums: ForumWithCourse[] = [];
-      for (const wsForum of wsForums) {
-        const course = courses.find(c => c.id === wsForum.courseid);
-        if (course) {
-          allForums.push({
-            course_id: wsForum.courseid,
-            course_name: course.fullname,
-            intro: wsForum.intro,
-            cmid: wsForum.cmid.toString(),
-            forum_id: wsForum.id,
-            name: wsForum.name,
-            timemodified: wsForum.timemodified,
-          });
-        }
-      }
-
-      console.log(JSON.stringify({
-        status: "success",
-        timestamp: new Date().toISOString(),
-        total_courses: courses.length,
-        total_forums: allForums.length,
-      }));
-      for (const forum of allForums) {
-        console.log(JSON.stringify(forum));
-      }
-    });
+    .action(() => listForums("inprogress"));
 
   forumsCmd
     .command("list-all")
     .description("List all forums across all courses")
     .option("--level <type>", "Course level: in_progress (default) | all", "in_progress")
-    .option("--output <format>", "Output format: json|csv|table|silent")
-    .action(async (options, command) => {
-      const apiContext = await createApiContext(options, command);
-      if (!apiContext) {
-        process.exitCode = 1;
-        return;
-      }
-
+    .action(async (options) => {
       const classification = options.level === "all" ? undefined : "inprogress";
-      const courses = await getEnrolledCoursesApi(apiContext.session, {
-        classification,
-      });
-
-      const courseIds = courses.map(c => c.id);
-      const wsForums = await getForumsApi(apiContext.session, courseIds);
-
-      const allForums: ForumWithCourse[] = [];
-      for (const wsForum of wsForums) {
-        const course = courses.find(c => c.id === wsForum.courseid);
-        if (course) {
-          allForums.push({
-            course_id: wsForum.courseid,
-            course_name: course.fullname,
-            intro: wsForum.intro,
-            cmid: wsForum.cmid.toString(),
-            forum_id: wsForum.id,
-            name: wsForum.name,
-            timemodified: wsForum.timemodified,
-          });
-        }
-      }
-
-      console.log(JSON.stringify({
-        status: "success",
-        timestamp: new Date().toISOString(),
-        total_courses: courses.length,
-        total_forums: allForums.length,
-      }));
-      for (const forum of allForums) {
-        console.log(JSON.stringify(forum));
-      }
+      await listForums(classification);
     });
 
   forumsCmd
@@ -123,35 +87,21 @@ export function registerForumsCommand(program: Command): void {
         return;
       }
 
-      const courses = await getEnrolledCoursesApi(apiContext.session, {
-        classification: "inprogress",
-      });
-
-      const courseIds = courses.map(c => c.id);
-      const wsForums = await getForumsApi(apiContext.session, courseIds);
-
-      const targetForum = wsForums.find(
-        f => f.cmid.toString() === forumId || f.id === parseInt(forumId, 10)
-      );
-
-      if (!targetForum) {
+      const resolved = await resolveForumId(apiContext.session, forumId);
+      if (!resolved) {
         console.log(JSON.stringify({ status: "error", error: "Forum not found" }));
         process.exitCode = 1;
         return;
       }
 
-      const course = courses.find(c => c.id === targetForum.courseid);
-
-      const discussions = await getForumDiscussionsApi(apiContext.session, targetForum.id);
+      const discussions = await getForumDiscussionsApi(apiContext.session, resolved.forumId);
 
       const meta = {
         status: "success",
         timestamp: new Date().toISOString(),
-        forum_id: targetForum.id,
-        forum_name: targetForum.name,
-        forum_intro: targetForum.intro,
-        course_id: course?.id,
-        course_name: course?.fullname,
+        forum_id: resolved.forumId,
+        forum_name: resolved.name ?? null,
+        course_id: resolved.courseid ?? null,
         total_discussions: discussions.length,
       };
       console.log(JSON.stringify(meta));
@@ -233,29 +183,18 @@ export function registerForumsCommand(program: Command): void {
 
       const { log, session } = apiContext;
 
-      const courses = await getEnrolledCoursesApi(session, {
-        classification: "inprogress",
-      });
-
-      const courseIds = courses.map(c => c.id);
-      const wsForums = await getForumsApi(session, courseIds);
-
-      const targetForum = wsForums.find(
-        f => f.cmid.toString() === forumId || f.id === parseInt(forumId, 10)
-      );
-
-      if (!targetForum) {
+      const resolved = await resolveForumId(session, forumId);
+      if (!resolved) {
         log.error(`Forum not found: ${forumId}`);
         process.exitCode = 1;
         return;
       }
 
-      const course = courses.find(c => c.id === targetForum.courseid);
-      log.info(`Posting to forum: ${targetForum.name} (${course?.fullname})`);
+      log.info(`Posting to forum: ${resolved.name ?? forumId}`);
 
       const result = await addForumDiscussionApi(
         session,
-        targetForum.id,
+        resolved.forumId,
         subject,
         message
       );
