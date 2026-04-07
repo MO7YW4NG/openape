@@ -78,10 +78,14 @@ jobs:
       - name: Build (cross)
         if: matrix.use_cross
         run: cross build --release --locked --target ${{ matrix.target }}
+        env:
+          PLAYWRIGHT_DRIVER_VERSION: "1.42.0"
 
       - name: Build (cargo)
         if: "!matrix.use_cross"
         run: cargo build --release --locked --target ${{ matrix.target }}
+        env:
+          PLAYWRIGHT_DRIVER_VERSION: "1.42.0"
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -102,10 +106,10 @@ jobs:
             const fs = require('fs');
             const replace = (path, out) => {
               let content = fs.readFileSync(path, 'utf8');
-              content = content.replace(/\$\{node_pkg\}/g, process.env.node_pkg)
-                               .replace(/\$\{node_version\}/g, process.env.node_version)
-                               .replace(/\$\{node_os\}/g, process.env.node_os)
-                               .replace(/\$\{node_arch\}/g, process.env.node_arch);
+              content = content.replaceAll('${node_pkg}', process.env.node_pkg)
+                               .replaceAll('${node_version}', process.env.node_version)
+                               .replaceAll('${node_os}', process.env.node_os)
+                               .replaceAll('${node_arch}', process.env.node_arch);
               fs.writeFileSync(out, content);
             };
             replace('npm/package.json.tmpl', 'npm/${{ matrix.node_pkg }}/package.json');
