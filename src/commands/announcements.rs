@@ -5,7 +5,7 @@ use crate::moodle::message::get_messages_api;
 use crate::moodle::forum::get_discussion_posts_api;
 use crate::output::format_and_output;
 use crate::utils::format_moodle_date;
-use super::{ApiCtx, level_to_classification};
+use super::ApiCtx;
 
 pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
     let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
@@ -35,7 +35,7 @@ pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
             }).collect();
 
             // TODO: course-level filtering when messages include course context
-            let _classification = level_to_classification(*level);
+            let _level = level;
 
             // Sort by created_at descending (already strings, lexicographic sort works for ISO dates)
             items.sort_by(|a, b| {

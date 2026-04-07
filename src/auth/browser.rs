@@ -12,29 +12,42 @@ pub struct LaunchedBrowser {
     pub page: Page,
     /// Background task handling browser events - must be kept alive
     pub handler: JoinHandle<()>,
+    /// Temp directory to clean up on close (if any)
+    pub temp_dir: Option<PathBuf>,
 }
 
-/// Find a Chromium-based browser executable on the system.
-/// Priority: Edge > Chrome > Brave
-pub fn find_browser_path() -> anyhow::Result<String> {
+/// Find Chromium-based browser executables on the system (in priority order).
+/// Priority: 64-bit Edge > Chrome > Brave > 32-bit Edge (last resort)
+pub fn find_browser_paths() -> Vec<String> {
+    let mut found = Vec::new();
     if cfg!(target_os = "windows") {
         let program_files = std::env::var("PROGRAMFILES").unwrap_or_default();
         let program_files_x86 = std::env::var("PROGRAMFILES(X86)").unwrap_or_default();
         let local_app_data = std::env::var("LOCALAPPDATA").unwrap_or_default();
 
+        // Priority order: 64-bit browsers first, then 32-bit as fallback
         let browsers = [
+            // 64-bit Edge (highest priority)
             (program_files.clone(), r"Microsoft\Edge\Application\msedge.exe"),
-            (program_files_x86.clone(), r"Microsoft\Edge\Application\msedge.exe"),
             (local_app_data.clone(), r"Microsoft\Edge\Application\msedge.exe"),
+            // Chrome
             (program_files.clone(), r"Google\Chrome\Application\chrome.exe"),
             (program_files_x86.clone(), r"Google\Chrome\Application\chrome.exe"),
-            (program_files, r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+            // Brave
+            (program_files.clone(), r"BraveSoftware\Brave-Browser\Application\brave.exe"),
+            // 32-bit Edge (last resort - often has CDP issues)
+            (program_files_x86.clone(), r"Microsoft\Edge\Application\msedge.exe"),
         ];
 
         for (root, suffix) in &browsers {
+            if root.is_empty() { continue; }
             let candidate = Path::new(root).join(suffix);
             if candidate.exists() {
-                return Ok(candidate.to_string_lossy().to_string());
+                let path_str = candidate.to_string_lossy().to_string();
+                // Avoid duplicates
+                if !found.contains(&path_str) {
+                    found.push(path_str);
+                }
             }
         }
     } else if cfg!(target_os = "macos") {
@@ -45,7 +58,7 @@ pub fn find_browser_path() -> anyhow::Result<String> {
         ];
         for c in &candidates {
             if Path::new(c).exists() {
-                return Ok(c.to_string());
+                found.push(c.to_string());
             }
         }
     } else {
@@ -58,12 +71,12 @@ pub fn find_browser_path() -> anyhow::Result<String> {
         ];
         for c in &candidates {
             if Path::new(c).exists() {
-                return Ok(c.to_string());
+                found.push(c.to_string());
             }
         }
     }
 
-    anyhow::bail!("No browser found (Edge/Chrome/Brave). Please install one.")
+    found
 }
 
 /// Get the user data directory path for persistent sessions.
@@ -83,25 +96,50 @@ pub async fn launch_browser(executable_path: &str, headless: bool, user_data_dir
         config_builder = config_builder.with_head();
     }
     
-    // Add user data dir for persistent sessions (MUST be absolute path)
+    // Use provided user_data_dir or generate a unique temp directory.
+    // This prevents session restore from previous runs.
+    let temp_dir: Option<PathBuf>;
     if let Some(data_dir) = user_data_dir {
         let _ = std::fs::create_dir_all(data_dir);
         let abs_path = std::fs::canonicalize(data_dir)
             .unwrap_or_else(|_| data_dir.clone());
         config_builder = config_builder.user_data_dir(&abs_path);
+        temp_dir = None; // Not a temp dir, don't clean up
+    } else {
+        // Generate unique temp dir to avoid session restore issues
+        let unique_dir = std::env::temp_dir().join(format!("openape-browser-{}", uuid::Uuid::new_v4()));
+        let _ = std::fs::create_dir_all(&unique_dir);
+        temp_dir = Some(unique_dir.clone());
+        config_builder = config_builder.user_data_dir(&unique_dir);
     }
     
-    // Chrome launch args
-    config_builder = config_builder
-        .arg("--disable-gpu")
-        .arg("--disable-dev-shm-usage")
-        .arg("--disable-software-rasterizer")
-        .arg("--disable-extensions");
+    // Add stability flags for Windows Edge compatibility
+    #[cfg(windows)]
+    {
+        config_builder = config_builder
+            .arg("--disable-gpu")
+            .arg("--disable-software-rasterizer")
+            .arg("--no-first-run")
+            .arg("--no-default-browser-check")
+            .arg("--disable-background-networking")
+            .arg("--disable-sync")
+            .arg("--disable-translate")
+            .arg("--disable-features=TranslateUI")
+            // Prevent session restore (opening previous tabs)
+            .arg("--disable-session-crashed-bubble")
+            .arg("--disable-infobars")
+            .arg("--noerrdialogs")
+            .arg("--hide-crash-restore-bubble");
+    }
+    #[cfg(not(windows))]
+    {
+        config_builder = config_builder
+            .no_sandbox()
+            .arg("--disable-gpu")
+            .arg("--disable-dev-shm-usage")
+            .arg("--disable-session-crashed-bubble");
+    }
     
-    // Add remote debugging port (required for CDP)
-    config_builder = config_builder
-        .arg("--remote-debugging-port=0");
-
     let config = config_builder.build()
         .map_err(|e| anyhow::anyhow!("Failed to build browser config: {}", e))?;
 
@@ -124,14 +162,20 @@ pub async fn launch_browser(executable_path: &str, headless: bool, user_data_dir
         browser,
         page,
         handler: handle,
+        temp_dir,
     })
 }
 
 /// Close browser and cleanup.
 pub async fn close_browser(launched: LaunchedBrowser) {
-    let LaunchedBrowser { mut browser, handler, .. } = launched;
+    let LaunchedBrowser { mut browser, handler, temp_dir, .. } = launched;
     let _ = browser.close().await;
     handler.abort();
+    
+    // Clean up temp directory
+    if let Some(dir) = temp_dir {
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }
 
 /// Cookie structure for serialization.

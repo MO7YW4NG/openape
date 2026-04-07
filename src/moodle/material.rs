@@ -38,3 +38,58 @@ pub async fn get_resources_by_courses_api(
         }
     }).collect())
 }
+
+/// Mark a resource as viewed via WS API (for completionview-type tracking).
+pub async fn view_resource_api(
+    client: &Client,
+    session: &SessionInfo,
+    instance_id: u64,
+) -> anyhow::Result<bool> {
+    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let args = moodle_args!("resourceid" => instance_id);
+    let result = moodle_api_call(client, &session.moodle_base_url, ws_token,
+        "mod_resource_view_resource", &args).await?;
+
+    Ok(result.get("status").and_then(|v| v.as_bool()).unwrap_or(result.is_null()))
+}
+
+/// Get incomplete activity completion statuses for a course.
+pub async fn get_incomplete_completions(
+    client: &Client,
+    session: &SessionInfo,
+    course_id: u64,
+    userid: u64,
+) -> anyhow::Result<Vec<IncompleteCompletion>> {
+    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let args = moodle_args!("courseid" => course_id, "userid" => userid);
+    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
+        "core_completion_get_activities_completion_status", &args).await?;
+
+    let statuses = data.get("statuses").and_then(|s| s.as_array()).cloned().unwrap_or_default();
+    Ok(statuses.into_iter().filter_map(|s| {
+        let hascompletion = s.get("hascompletion").and_then(|v| v.as_bool()).unwrap_or(false);
+        let overall = s.get("isoverallcomplete").and_then(|v| v.as_bool()).unwrap_or(false);
+        if !hascompletion || overall { return None; }
+
+        let cmid = s.get("cmid").and_then(|v| v.as_u64()).unwrap_or(0);
+        let instance = s.get("instance").and_then(|v| v.as_u64()).unwrap_or(0);
+        let modname = s.get("modname").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let name = s.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        // Extract completion rule
+        let rule = s.get("details").and_then(|d| d.as_array())
+            .and_then(|arr| arr.first())
+            .and_then(|d| d.get("rulename").and_then(|v| v.as_str()))
+            .map(String::from);
+
+        Some(IncompleteCompletion { cmid, instance, modname, name, rule })
+    }).collect())
+}
+
+/// Info about an incomplete activity's completion tracking.
+pub struct IncompleteCompletion {
+    pub cmid: u64,
+    pub instance: u64,
+    pub modname: String,
+    pub name: String,
+    pub rule: Option<String>,
+}

@@ -6,7 +6,7 @@ use crate::moodle::quiz::{
     get_all_quiz_attempt_data_api, process_quiz_attempt_api,
 };
 use crate::output::format_and_output;
-use crate::utils::format_moodle_date;
+use crate::utils::{format_moodle_date, strip_html_tags};
 use super::{ApiCtx, level_to_classification};
 
 pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
@@ -101,11 +101,7 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
                 "maxmark": q.maxmark,
                 "status": q.status,
                 "questionnumber": q.questionnumber,
-                "html": q.html.as_deref().map(|h| {
-                    // Strip HTML for cleaner output
-                    let re = regex::Regex::new(r"<[^>]+>").unwrap_or_else(|_| regex::Regex::new(r"x").unwrap());
-                    re.replace_all(h, "").into_owned()
-                }),
+                "html": q.html.as_deref().map(strip_html_tags),
             })).collect();
 
             questions.sort_by_key(|q| q.get("slot").and_then(|v| v.as_u64()).unwrap_or(0));

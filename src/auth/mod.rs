@@ -4,7 +4,7 @@ mod browser;
 mod token;
 
 pub use browser::{Cookie, cookies_to_cookie_header, get_cookies, LaunchedBrowser};
-use browser::{close_browser, find_browser_path, launch_browser, get_user_data_dir, set_cookies};
+use browser::{close_browser, find_browser_paths, launch_browser, set_cookies, get_user_data_dir};
 use token::{extract_token_from_custom_scheme, SessionMeta};
 
 use std::path::Path;
@@ -13,14 +13,16 @@ use crate::config::AppConfig;
 use crate::logger::Logger;
 use crate::moodle::types::SessionInfo;
 use chromiumoxide::Page;
-use futures::StreamExt;
 
 /// Launch browser, restore/create session, acquire WS token.
 pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::Result<(LaunchedBrowser, Option<String>)> {
-    let exe_path = find_browser_path()?;
-    log.debug(&format!("Using browser: {}", exe_path));
+    let browser_candidates = find_browser_paths();
+    if browser_candidates.is_empty() {
+        anyhow::bail!("No browser found (Edge/Chrome/Brave). Please install one.");
+    }
 
-    let user_data_dir = get_user_data_dir(&config.auth_state_path);
+    let cookies_path = get_cookies_path(&config.auth_state_path);
+    let has_cookies = cookies_path.exists();
     
     // Load saved session metadata
     let mut meta = SessionMeta::load(&config.auth_state_path);
@@ -29,8 +31,50 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
         log.info("Loaded saved Web Service Token.");
     }
 
-    // Try launching with persistent user data directory
-    let launched = launch_browser(&exe_path, config.headless, Some(&user_data_dir)).await?;
+    // Always use clean profile + cookies (simplest and most reliable).
+    // Try headless first on all platforms, fall back to headed if needed.
+    log.info(&format!("Found {} browser candidate(s)", browser_candidates.len()));
+    let mut launched_opt: Option<LaunchedBrowser> = None;
+    let mut last_err: Option<anyhow::Error> = None;
+
+    // Attempt headless first unless user explicitly wants headed
+    let headless_modes = if config.headless {
+        vec![true]
+    } else {
+        vec![true, false]
+    };
+
+    'outer: for &use_headless in &headless_modes {
+        for exe_path in &browser_candidates {
+            match launch_browser(exe_path, use_headless, None).await {
+                Ok(l) => {
+                    launched_opt = Some(l);
+                    break;
+                }
+                Err(e) => {
+                    last_err = Some(anyhow::anyhow!("Launch failed on {}: {}", exe_path, e));
+                }
+            }
+        }
+        if launched_opt.is_some() {
+            break 'outer;
+        }
+    }
+    let launched = match launched_opt {
+        Some(l) => l,
+        None => return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Failed to launch any browser candidate"))),
+    };
+
+    // Restore cookies to clean profile (navigate first, then set cookies, then reload)
+    if has_cookies {
+        if let Ok(cookies) = load_cookies(&config.auth_state_path) {
+            let _ = launched.page.goto(&config.moodle_base_url).await;
+            let _ = launched.page.wait_for_navigation().await;
+            let _ = set_cookies(&launched.page, &cookies).await;
+            let _ = launched.page.reload().await;
+            let _ = launched.page.wait_for_navigation().await;
+        }
+    }
 
     // Check if session is still valid
     let session_valid = check_session_valid(&launched.page, &config.moodle_base_url).await;
@@ -57,7 +101,21 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
     // If headless, close and relaunch headed
     if config.headless {
         close_browser(launched).await;
-        let launched = launch_browser(&exe_path, false, Some(&user_data_dir)).await?;
+        let browser_candidates = find_browser_paths();
+        if browser_candidates.is_empty() {
+            anyhow::bail!("No browser found (Edge/Chrome/Brave). Please install one.");
+        }
+        let mut relaunched: Option<LaunchedBrowser> = None;
+        for exe_path in &browser_candidates {
+            if let Ok(l) = launch_browser(exe_path, false, None).await {
+                relaunched = Some(l);
+                break;
+            }
+        }
+        let launched = match relaunched {
+            Some(l) => l,
+            None => anyhow::bail!("Failed to relaunch browser in headed mode."),
+        };
         perform_login(&launched.page, &config.moodle_base_url, log).await?;
         
         // Acquire WS token
@@ -124,14 +182,15 @@ pub fn create_api_context(config: &AppConfig, log: &Logger) -> anyhow::Result<Se
 /// Check if session is valid by navigating to dashboard.
 async fn check_session_valid(page: &Page, base_url: &str) -> bool {
     let result = page.goto(&format!("{}/my/", base_url)).await;
-    
+
     if result.is_err() {
         return false;
     }
-    
-    // Wait a bit for redirect
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-    
+
+    // Wait for navigation/redirect to settle
+    let _ = page.wait_for_navigation().await;
+    tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
     if let Ok(Some(url)) = page.url().await {
         // If redirected to login, session is invalid
         !url.contains("login") && !url.contains("microsoftonline")
@@ -184,43 +243,37 @@ async fn acquire_ws_token(page: &Page, base_url: &str, log: &Logger) -> anyhow::
 
     log.debug(&format!("Token acquisition URL: {}", launch_url));
 
-    // Use network interception to catch redirect
-    use chromiumoxide::cdp::browser_protocol::network::EventResponseReceived;
-    
-    let mut response_events = page.event_listener::<EventResponseReceived>().await
-        .map_err(|e| anyhow::anyhow!("Failed to create event listener: {}", e))?;
-
-    // Navigate (will get redirected to moodlemobile:// which browser can't handle)
-    let _ = page.goto(&launch_url).await;
-
-    // Listen for the redirect response
-    let deadline = tokio::time::Instant::now() + tokio::time::Duration::from_secs(15);
-    
-    while let Ok(result) = tokio::time::timeout(
-        deadline.saturating_duration_since(tokio::time::Instant::now()),
-        response_events.next()
-    ).await {
-        if let Some(event) = result {
-            // Check response URL for moodlemobile:// redirect
-            let response_url = &event.response.url;
-            if response_url.starts_with("moodlemobile://") {
-                if let Some(token) = extract_token_from_custom_scheme(response_url) {
-                    log.success("Web Service Token acquired successfully.");
-                    return Ok(token);
-                }
-            }
-            
-            // Also check status code for redirect (302/307)
-            if event.response.status == 302 || event.response.status == 307 {
-                // Try to get Location header - chromiumoxide headers is a HashMap-like structure
-                // We need to iterate through headers to find Location
-                // Note: This is a simplified approach - we rely on response_url being set
-                log.debug(&format!("Got redirect with status {}", event.response.status));
-            }
-        }
+    // More reliable than CDP event interception:
+    // use current browser cookies and perform a direct HTTP request without following redirects.
+    let cookies = get_cookies(page).await?;
+    let cookie_header = cookies_to_cookie_header(&cookies, &launch_url);
+    if cookie_header.is_empty() {
+        anyhow::bail!("No cookies available for token acquisition.");
     }
 
-    anyhow::bail!("Token acquisition timed out - no moodlemobile:// redirect received.")
+    let client = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?;
+
+    let resp = client
+        .get(&launch_url)
+        .header("Cookie", cookie_header)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("Token request failed: {}", e))?;
+
+    if let Some(loc) = resp.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()) {
+        if loc.starts_with("moodlemobile://") {
+            if let Some(token) = extract_token_from_custom_scheme(loc) {
+                log.success("Web Service Token acquired successfully.");
+                return Ok(token);
+            }
+        }
+        anyhow::bail!("Unexpected redirect location: {}", loc);
+    }
+
+    anyhow::bail!("Token acquisition failed: no Location header received (status {}).", resp.status())
 }
 
 /// Check session status without launching a browser.
@@ -228,78 +281,98 @@ pub fn check_session_status(config: &AppConfig) -> (bool, Option<String>, Option
     let meta = SessionMeta::load(&config.auth_state_path);
     let ws_token = meta.get_ws_token();
     let sesskey = meta.get_sesskey();
-    let user_data_dir = get_user_data_dir(&config.auth_state_path);
-    let has_data_dir = user_data_dir.exists();
+    let cookies_path = get_cookies_path(&config.auth_state_path);
+    let has_session = cookies_path.exists();
 
-    (has_data_dir, sesskey, ws_token)
+    (has_session, sesskey, ws_token)
 }
 
 /// Remove saved session files.
 pub fn logout(config: &AppConfig) {
-    let user_data_dir = get_user_data_dir(&config.auth_state_path);
-    if user_data_dir.exists() {
-        let _ = std::fs::remove_dir_all(&user_data_dir);
+    // Remove cookies file
+    let cookies_path = get_cookies_path(&config.auth_state_path);
+    if cookies_path.exists() {
+        let _ = std::fs::remove_file(&cookies_path);
     }
+    // Remove metadata
     let meta_path_str = SessionMeta::meta_path(&config.auth_state_path);
     let meta_path = Path::new(&meta_path_str);
     if meta_path.exists() {
         let _ = std::fs::remove_file(meta_path);
     }
-    // Also remove cookies file
-    let cookies_path = get_cookies_path(&config.auth_state_path);
-    if cookies_path.exists() {
-        let _ = std::fs::remove_file(&cookies_path);
+    // Clean up old browser data dir if exists
+    let user_data_dir = get_user_data_dir(&config.auth_state_path);
+    if user_data_dir.exists() {
+        let _ = std::fs::remove_dir_all(&user_data_dir);
     }
 }
 
-/// Launch a headless browser session using saved session data.
+/// Launch a browser session using saved cookies (clean profile).
 pub async fn launch_persistent_session(config: &AppConfig, log: &Logger) -> anyhow::Result<LaunchedBrowser> {
-    let user_data_dir = get_user_data_dir(&config.auth_state_path);
     let cookies_path = get_cookies_path(&config.auth_state_path);
 
-    let has_persistent = user_data_dir.exists();
-    let has_cookies = cookies_path.exists();
-
-    if !has_persistent && !has_cookies {
-        anyhow::bail!("No browser session found. Run `openape login` first.");
+    if !cookies_path.exists() {
+        anyhow::bail!("No saved session found. Run `openape login` first.");
     }
 
-    let exe_path = find_browser_path()?;
-    log.debug(&format!("Using browser: {}", exe_path));
+    let browser_candidates = find_browser_paths();
+    if browser_candidates.is_empty() {
+        anyhow::bail!("No browser found (Edge/Chrome/Brave). Please install one.");
+    }
 
-    let launched = launch_browser(
-        &exe_path,
-        true,
-        if has_persistent { Some(&user_data_dir) } else { None }
-    ).await?;
+    // Try headless first, fall back to headed if session validation fails
+    for &use_headless in &[true, false] {
+        let mode_label = if use_headless { "headless" } else { "headed" };
 
-    // If we have saved cookies but no persistent dir, restore them
-    if !has_persistent && has_cookies {
+        let mut launched_opt: Option<LaunchedBrowser> = None;
+        for exe_path in &browser_candidates {
+            if let Ok(l) = launch_browser(exe_path, use_headless, None).await {
+                launched_opt = Some(l);
+                break;
+            }
+        }
+        let launched = match launched_opt {
+            Some(l) => l,
+            None => continue,
+        };
+
+        // Restore cookies - must navigate to domain first, then set cookies, then reload
         if let Ok(cookies) = load_cookies(&config.auth_state_path) {
+            let _ = launched.page.goto(&config.moodle_base_url).await;
+            let _ = launched.page.wait_for_navigation().await;
             let _ = set_cookies(&launched.page, &cookies).await;
+            let _ = launched.page.reload().await;
+            let _ = launched.page.wait_for_navigation().await;
         }
-    }
 
-    // Validate session
-    let check_url = format!("{}/my/", config.moodle_base_url);
-    let result = launched.page.goto(&check_url).await;
-
-    if result.is_err() {
-        close_browser(launched).await;
-        anyhow::bail!("Failed to navigate. Run `openape login` first.");
-    }
-
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-    if let Ok(Some(url)) = launched.page.url().await {
-        if url.contains("login") || url.contains("microsoftonline") {
+        // Validate session
+        let check_url = format!("{}/my/", config.moodle_base_url);
+        if launched.page.goto(&check_url).await.is_err() {
             close_browser(launched).await;
-            anyhow::bail!("Browser session expired. Run `openape login` to re-authenticate.");
+            log.warn(&format!("{} mode: navigation failed, trying next mode...", mode_label));
+            continue;
         }
+
+        let _ = launched.page.wait_for_navigation().await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+
+        let valid = if let Ok(Some(url)) = launched.page.url().await {
+            !url.contains("login") && !url.contains("microsoftonline")
+        } else {
+            false
+        };
+
+        if !valid {
+            close_browser(launched).await;
+            log.warn(&format!("{} mode: session invalid, trying next mode...", mode_label));
+            continue;
+        }
+
+        log.info("Browser session restored.");
+        return Ok(launched);
     }
 
-    log.info("Browser session restored.");
-    Ok(launched)
+    anyhow::bail!("Browser session expired. Run `openape login` to re-authenticate.")
 }
 
 /// Close a browser session.

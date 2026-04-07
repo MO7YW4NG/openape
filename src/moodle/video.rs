@@ -129,7 +129,12 @@ pub async fn update_completion_status(
     let args = moodle_args!("cmid" => cmid, "completed" => if completed { 1 } else { 0 });
     let result = moodle_api_call(client, &session.moodle_base_url, ws_token,
         "core_completion_update_activity_completion_status_manually", &args).await?;
-    
+
+    // Moodle may return null (no error = success) or { "status": true }
+    if result.is_null() {
+        return Ok(true);
+    }
+
     Ok(result.get("status").and_then(|v| v.as_bool()).unwrap_or(false))
 }
 
@@ -139,55 +144,43 @@ pub struct VideoMetadata {
     pub video_sources: Vec<String>,
     pub youtube_ids: Vec<String>,
     pub view_id: Option<u64>,
-    pub duration: Option<u64>,
+    pub duration: u64,
 }
 
 /// Extract video sources and YouTube IDs from HTML content.
-/// Shared by both API and browser-based metadata extraction.
-fn extract_video_sources_from_html(html: &str, log: &Logger) -> anyhow::Result<VideoMetadata> {
+fn extract_video_sources_from_html(html: &str, log: &Logger) -> (Vec<String>, Vec<String>) {
     let mut video_sources: Vec<String> = Vec::new();
     let mut youtube_ids: Vec<String> = Vec::new();
 
     // 1. <source src="...">
-    let source_re = regex::Regex::new(r#"<source[^>]+src=["']([^"']+)["']"#)?;
+    let source_re = regex::Regex::new(r#"<source[^>]+src=["']([^"']+)["']"#).unwrap();
     for cap in source_re.captures_iter(html) {
         video_sources.push(cap[1].to_string());
     }
 
     // 2. <video src="...">
-    let video_re = regex::Regex::new(r#"<video[^>]+src=["']([^"']+)["']"#)?;
+    let video_re = regex::Regex::new(r#"<video[^>]+src=["']([^"']+)["']"#).unwrap();
     for cap in video_re.captures_iter(html) {
         video_sources.push(cap[1].to_string());
     }
 
     // 3. <iframe src="...">
-    let iframe_re = regex::Regex::new(r#"<iframe[^>]+src=["']([^"']+)["']"#)?;
+    let iframe_re = regex::Regex::new(r#"<iframe[^>]+src=["']([^"']+)["']"#).unwrap();
+    let yt_re = regex::Regex::new(
+        r"(?:youtube\.com/(?:embed/|v/|watch\?v=)|youtu\.be/)([a-zA-Z0-9_-]{11})"
+    ).unwrap();
     for cap in iframe_re.captures_iter(html) {
         let src = &cap[1];
         video_sources.push(src.to_string());
-        if let Some(yt_cap) = regex::Regex::new(
-            r"(?:youtube\.com/(?:embed/|v/|watch\?v=)|youtu\.be/)([a-zA-Z0-9_-]{11})"
-        )?.captures(src) {
+        if let Some(yt_cap) = yt_re.captures(src) {
             youtube_ids.push(yt_cap[1].to_string());
         }
     }
 
-    // 4. Extract view_id and duration from JavaScript
-    let view_id = regex::Regex::new(r#""view_id"\s*:\s*(\d+)"#)?
-        .captures(html)
-        .and_then(|c| c[1].parse::<u64>().ok());
-    
-    let duration = regex::Regex::new(r#""duration"\s*:\s*(\d+)"#)?
-        .captures(html)
-        .and_then(|c| c[1].parse::<u64>().ok());
-
     video_sources.dedup();
 
-    log.debug(&format!("Found {} video source(s)", video_sources.len()));
-    if let Some(vid) = view_id { log.debug(&format!("  View ID: {}", vid)); }
-    if let Some(dur) = duration { log.debug(&format!("  Duration: {}", dur)); }
-
-    Ok(VideoMetadata { video_sources, youtube_ids, view_id, duration })
+    log.debug(&format!("Found {} video source(s), {} youtube id(s)", video_sources.len(), youtube_ids.len()));
+    (video_sources, youtube_ids)
 }
 
 /// Extract video metadata from a supervideo page using an authenticated browser.
@@ -202,8 +195,9 @@ pub async fn get_video_metadata_browser(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to navigate to video page: {}", e))?;
 
-    // Wait for page content to load
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // Wait for DOM content to load
+    let _ = page.wait_for_navigation().await;
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
     let url = page.url()
         .await
@@ -218,7 +212,64 @@ pub async fn get_video_metadata_browser(
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get page content: {}", e))?;
 
-    extract_video_sources_from_html(&html, log)
+    // --- Extract view_id ---
+    let view_id_re1 = regex::Regex::new(r"player_create.*?amd\.\w+\((\d+)").unwrap();
+    let view_id_re2 = regex::Regex::new(r#"view_id['":\s]+(\d+)"#).unwrap();
+
+    let view_id = view_id_re1.captures(&html)
+        .or_else(|| view_id_re2.captures(&html))
+        .and_then(|c| c[1].parse::<u64>().ok());
+
+    if view_id.is_none() {
+        anyhow::bail!("Could not extract view_id from {}", activity_url);
+    }
+
+    // --- Extract duration ---
+    let is_youtube = html.contains("youtube.com") || html.contains("youtu.be");
+    let mut duration: Option<u64> = None;
+
+    if !is_youtube {
+        // Try to get duration from <video> element via JS evaluation
+        let js = "(()=>{const v=document.querySelector('video');if(v&&v.duration&&isFinite(v.duration))return Math.ceil(v.duration);return null;})";
+        if let Ok(vid_dur) = page.evaluate(js).await {
+            if let Some(val) = vid_dur.value() {
+                if let Some(d) = val.as_f64() {
+                    duration = Some(d as u64);
+                }
+            }
+        }
+
+        // If still no duration, wait a bit for video metadata to load and retry
+        if duration.is_none() {
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+            if let Ok(vid_dur) = page.evaluate(js).await {
+                if let Some(val) = vid_dur.value() {
+                    if let Some(d) = val.as_f64() {
+                        duration = Some(d as u64);
+                    }
+                }
+            }
+        }
+    }
+
+    // Fallback: regex from HTML
+    if duration.is_none() {
+        let duration_re = regex::Regex::new(r#"["']?duration["']?\s*[:=]\s*(\d+)"#).unwrap();
+        duration = duration_re.captures(&html)
+            .and_then(|c| c[1].parse::<u64>().ok());
+    }
+
+    // Final fallback: default 600s
+    let duration = duration.unwrap_or_else(|| {
+        log.debug(&format!("Duration unknown{}, using 600s", if is_youtube { " (YouTube)" } else { "" }));
+        600
+    });
+
+    log.debug(&format!("view_id={:?}, duration={}s", view_id, duration));
+
+    let (video_sources, youtube_ids) = extract_video_sources_from_html(&html, log);
+
+    Ok(VideoMetadata { video_sources, youtube_ids, view_id, duration })
 }
 
 /// Download a video file using cookies extracted from a browser session.

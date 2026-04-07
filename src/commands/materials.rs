@@ -1,7 +1,7 @@
 use anyhow::Result;
 use crate::Cli;
-use crate::moodle::course::get_enrolled_courses_api;
-use crate::moodle::material::get_resources_by_courses_api;
+use crate::moodle::course::{get_enrolled_courses_api, get_site_info};
+use crate::moodle::material::{get_resources_by_courses_api, get_incomplete_completions, view_resource_api};
 use crate::moodle::video::update_completion_status;
 use crate::output::format_and_output;
 use crate::utils::{sanitize_filename, format_file_size};
@@ -110,32 +110,56 @@ pub async fn run(cmd: &crate::MaterialsCommands, cli: &Cli) -> Result<()> {
         }
 
         crate::MaterialsCommands::Complete { course_id, dry_run } => {
-            let resources = get_resources_by_courses_api(&ctx.client, &ctx.session, &[*course_id]).await?;
-            let total = resources.len();
-            ctx.log.info(&format!("Found {} resources", total));
+            let site_info = get_site_info(&ctx.client, &ctx.session).await?;
+            let incompletes = get_incomplete_completions(&ctx.client, &ctx.session, *course_id, site_info.userid).await?;
+            // Filter out supervideo modules (handled by videos command)
+            let incompletes: Vec<_> = incompletes.into_iter().filter(|i| i.modname != "supervideo").collect();
+            let total = incompletes.len();
+            ctx.log.info(&format!("Found {} incomplete resources", total));
+
+            if total == 0 {
+                let result = serde_json::json!({
+                    "action": "complete", "course_id": *course_id,
+                    "total": 0, "completed": 0, "failed": 0, "dry_run": *dry_run,
+                });
+                format_and_output(&[result], ctx.output, None);
+                return Ok(());
+            }
 
             if *dry_run {
-                for r in &resources {
-                    ctx.log.info(&format!("  [dry-run] {}", r.name));
+                for i in &incompletes {
+                    ctx.log.info(&format!("  [dry-run] {} ({}: rule={:?})", i.name, i.modname, i.rule));
                 }
                 let result = serde_json::json!({
-                    "action": "complete",
-                    "course_id": *course_id,
-                    "total": total,
-                    "completed": 0,
-                    "dry_run": true,
+                    "action": "complete", "course_id": *course_id,
+                    "total": total, "completed": 0, "failed": 0, "dry_run": true,
                 });
                 format_and_output(&[result], ctx.output, None);
                 return Ok(());
             }
 
             let mut completed = 0;
-            for r in &resources {
-                let cmid: u64 = r.cmid.parse().unwrap_or(0);
-                if cmid == 0 { continue; }
-                if let Ok(true) = update_completion_status(&ctx.client, &ctx.session, cmid, true).await {
-                    ctx.log.success(&format!("  Completed: {}", r.name));
+            for i in &incompletes {
+                let success = match i.rule.as_deref() {
+                    Some("completionview") if i.modname == "resource" => {
+                        // Use mod_resource_view_resource for view-based completion
+                        view_resource_api(&ctx.client, &ctx.session, i.instance).await
+                            .unwrap_or(false)
+                    }
+                    _ => {
+                        // Try manual completion API
+                        match update_completion_status(&ctx.client, &ctx.session, i.cmid, true).await {
+                            Ok(true) => true,
+                            Ok(false) | Err(_) => false,
+                        }
+                    }
+                };
+
+                if success {
+                    ctx.log.success(&format!("  Completed: {}", i.name));
                     completed += 1;
+                } else {
+                    ctx.log.warn(&format!("  Failed: {} ({}: rule={:?})", i.name, i.modname, i.rule));
                 }
             }
             ctx.log.info(&format!("Completed {}/{} resources", completed, total));
@@ -144,6 +168,7 @@ pub async fn run(cmd: &crate::MaterialsCommands, cli: &Cli) -> Result<()> {
                 "course_id": *course_id,
                 "total": total,
                 "completed": completed,
+                "failed": total - completed,
                 "dry_run": false,
             });
             format_and_output(&[result], ctx.output, None);
@@ -152,35 +177,51 @@ pub async fn run(cmd: &crate::MaterialsCommands, cli: &Cli) -> Result<()> {
         crate::MaterialsCommands::CompleteAll { dry_run, level } => {
             let classification = level_to_classification(*level);
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
-            let course_ids: Vec<u64> = courses.iter().map(|c| c.id).collect();
-            let resources = get_resources_by_courses_api(&ctx.client, &ctx.session, &course_ids).await?;
+            let site_info = get_site_info(&ctx.client, &ctx.session).await?;
 
-            let total = resources.len();
-            ctx.log.info(&format!("Found {} resources across {} courses", total, courses.len()));
+            let mut all_incomplete = Vec::new();
+            for course in &courses {
+                if let Ok(items) = get_incomplete_completions(&ctx.client, &ctx.session, course.id, site_info.userid).await {
+                    all_incomplete.extend(items.into_iter().filter(|i| i.modname != "supervideo"));
+                }
+            }
+
+            let total = all_incomplete.len();
+            ctx.log.info(&format!("Found {} incomplete resources across {} courses", total, courses.len()));
 
             if *dry_run {
-                for r in &resources {
-                    ctx.log.info(&format!("  [dry-run] {}", r.name));
+                for i in &all_incomplete {
+                    ctx.log.info(&format!("  [dry-run] {} ({}: rule={:?})", i.name, i.modname, i.rule));
                 }
-                ctx.log.info(&format!("Would complete {} resources", total));
                 let result = serde_json::json!({
                     "action": "complete_all",
                     "courses_scanned": courses.len(),
-                    "total": total,
-                    "completed": 0,
-                    "dry_run": true,
+                    "total": total, "completed": 0, "dry_run": true,
                 });
                 format_and_output(&[result], ctx.output, None);
                 return Ok(());
             }
 
             let mut completed = 0;
-            for r in &resources {
-                let cmid: u64 = r.cmid.parse().unwrap_or(0);
-                if cmid == 0 { continue; }
-                if let Ok(true) = update_completion_status(&ctx.client, &ctx.session, cmid, true).await {
-                    ctx.log.success(&format!("  Completed: {}", r.name));
+            for i in &all_incomplete {
+                let success = match i.rule.as_deref() {
+                    Some("completionview") if i.modname == "resource" => {
+                        view_resource_api(&ctx.client, &ctx.session, i.instance).await
+                            .unwrap_or(false)
+                    }
+                    _ => {
+                        match update_completion_status(&ctx.client, &ctx.session, i.cmid, true).await {
+                            Ok(true) => true,
+                            Ok(false) | Err(_) => false,
+                        }
+                    }
+                };
+
+                if success {
+                    ctx.log.success(&format!("  Completed: {}", i.name));
                     completed += 1;
+                } else {
+                    ctx.log.warn(&format!("  Failed: {} ({}: rule={:?})", i.name, i.modname, i.rule));
                 }
             }
             ctx.log.info(&format!("Completed {}/{} resources", completed, total));
@@ -189,6 +230,7 @@ pub async fn run(cmd: &crate::MaterialsCommands, cli: &Cli) -> Result<()> {
                 "courses_scanned": courses.len(),
                 "total": total,
                 "completed": completed,
+                "failed": total - completed,
                 "dry_run": false,
             });
             format_and_output(&[result], ctx.output, None);
@@ -231,6 +273,8 @@ async fn download_resources(
         files: Vec::new(),
     };
 
+    std::fs::create_dir_all(output_dir)?;
+
     for resource in resources {
         if resource.mod_type != "resource" {
             summary.skipped += 1;
@@ -251,8 +295,6 @@ async fn download_resources(
             summary.failed += 1;
             continue;
         }
-
-        std::fs::create_dir_all(output_dir)?;
 
         let mut filename = sanitize_filename(&resource.name, 100);
         if Path::new(&filename).extension().is_none() {

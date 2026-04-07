@@ -2,10 +2,11 @@ use anyhow::Result;
 use crate::Cli;
 use crate::config::load_config;
 use crate::moodle::course::get_enrolled_courses_api;
-use crate::moodle::video::{get_supervideos_in_course_api, get_incomplete_videos_api, update_completion_status, get_video_metadata_browser, download_video_with_cookies, save_video_progress_api};
+use crate::moodle::video::{get_supervideos_in_course_api, get_incomplete_videos_api, update_completion_status, get_video_metadata_browser, download_video_with_cookies, save_video_progress_api, VideoMetadata};
 use crate::output::format_and_output;
 use crate::utils::sanitize_filename;
 use super::ApiCtx;
+use crate::moodle::types::SuperVideoModule;
 
 pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
     let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
@@ -82,24 +83,15 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                     }
                 };
 
-                // 2. Complete via API if view_id/duration found
-                let success = if let (Some(view_id), Some(duration)) = (metadata.view_id, metadata.duration) {
-                    save_video_progress_api(&ctx.client, &ctx.session, view_id, duration).await.unwrap_or(false)
-                } else {
-                    // Fallback to manual completion if possible
-                    let cmid: u64 = v.cmid.parse().unwrap_or(0);
-                    if cmid != 0 {
-                        update_completion_status(&ctx.client, &ctx.session, cmid, true).await.unwrap_or(false)
-                    } else {
-                        false
+                // 2. Complete via API
+                match complete_video(&ctx, &v, &metadata).await {
+                    Ok(()) => {
+                        ctx.log.success(&format!("  Completed: {}", v.name));
+                        completed += 1;
                     }
-                };
-
-                if success {
-                    ctx.log.success(&format!("  Completed: {}", v.name));
-                    completed += 1;
-                } else {
-                    ctx.log.warn(&format!("  Failed to complete: {}", v.name));
+                    Err(e) => {
+                        ctx.log.warn(&format!("  Failed to complete: {} — {}", v.name, e));
+                    }
                 }
             }
 
@@ -179,22 +171,14 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                     }
                 };
 
-                let success = if let (Some(view_id), Some(duration)) = (metadata.view_id, metadata.duration) {
-                    save_video_progress_api(&ctx.client, &ctx.session, view_id, duration).await.unwrap_or(false)
-                } else {
-                    let cmid: u64 = v.cmid.parse().unwrap_or(0);
-                    if cmid != 0 {
-                        update_completion_status(&ctx.client, &ctx.session, cmid, true).await.unwrap_or(false)
-                    } else {
-                        false
+                match complete_video(&ctx, &v, &metadata).await {
+                    Ok(()) => {
+                        ctx.log.success(&format!("  Completed: {}", v.name));
+                        completed += 1;
                     }
-                };
-
-                if success {
-                    ctx.log.success(&format!("  Completed: {}", v.name));
-                    completed += 1;
-                } else {
-                    ctx.log.warn(&format!("  Failed to complete: {}", v.name));
+                    Err(e) => {
+                        ctx.log.warn(&format!("  Failed to complete: {} — {}", v.name, e));
+                    }
                 }
             }
 
@@ -316,5 +300,39 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
         }
     }
 
+    Ok(())
+}
+
+/// Try to mark a video as complete via supervideo WS API, falling back to completion status.
+async fn complete_video(ctx: &ApiCtx, v: &SuperVideoModule, metadata: &VideoMetadata) -> anyhow::Result<()> {
+    ctx.log.debug(&format!(
+        "  metadata: view_id={:?}, duration={:?}, sources={}, yt_ids={}",
+        metadata.view_id, metadata.duration, metadata.video_sources.len(), metadata.youtube_ids.len()
+    ));
+
+    if let Some(view_id) = metadata.view_id {
+        let duration = metadata.duration;
+        let ok = save_video_progress_api(&ctx.client, &ctx.session, view_id, duration)
+            .await
+            .map_err(|e| anyhow::anyhow!("save_progress (view_id={}): {}", view_id, e))?;
+        if !ok {
+            anyhow::bail!("save_progress returned success=false (view_id={}, duration={})", view_id, duration);
+        }
+    } else {
+        ctx.log.warn(&format!(
+            "  No view_id/duration in page metadata, falling back to completion status API (cmid={})",
+            v.cmid
+        ));
+        let cmid: u64 = v.cmid.parse().map_err(|_| anyhow::anyhow!("invalid cmid: {}", v.cmid))?;
+        if cmid == 0 {
+            anyhow::bail!("cmid is 0, cannot complete via fallback API");
+        }
+        let ok = update_completion_status(&ctx.client, &ctx.session, cmid, true)
+            .await
+            .map_err(|e| anyhow::anyhow!("update_completion (cmid={}): {}", cmid, e))?;
+        if !ok {
+            anyhow::bail!("update_completion returned status=false (cmid={})", cmid);
+        }
+    }
     Ok(())
 }

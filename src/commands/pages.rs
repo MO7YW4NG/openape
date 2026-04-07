@@ -76,8 +76,7 @@ pub async fn run(cmd: &crate::PagesCommands, cli: &Cli) -> Result<()> {
 
 fn truncate_str(s: Option<&str>, max: usize) -> Option<String> {
     s.map(|t| {
-        let trimmed: String = t.chars().collect::<Vec<_>>().into_iter().collect::<String>()
-            .split_whitespace().collect::<Vec<_>>().join(" ");
+        let trimmed: String = t.split_whitespace().collect::<Vec<_>>().join(" ");
         if trimmed.chars().count() > max {
             let truncated: String = trimmed.chars().take(max).collect();
             format!("{}...", truncated.trim_end())

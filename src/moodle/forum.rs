@@ -77,7 +77,7 @@ pub async fn get_discussion_posts_api(
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
     let args = moodle_args!("discussionid" => discussion_id);
     let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "mod_forum_get_forum_discussion_posts", &args).await?;
+        "mod_forum_get_discussion_posts", &args).await?;
 
     let posts = data.get("posts")
         .and_then(|p| p.as_array())
