@@ -77,14 +77,12 @@ jobs:
 
       - name: Build (cross)
         if: matrix.use_cross
-        run: cross build --release --locked --target ${{ matrix.target }}
-        env:
-          # Make it visible to the host process invoking cross (often needed)
-          PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
-          CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
-          CROSS_CONTAINER_ENV_PLAYWRIGHT_BROWSERS_PATH: /tmp/ms-playwright
-          # Optional if supported:
-          CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_PATH: /tmp/playwright-driver
+        run: |
+          export PLAYWRIGHT_DRIVER_VERSION="1.49.0"
+          export CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_VERSION="1.49.0"
+          export CROSS_CONTAINER_ENV_PLAYWRIGHT_BROWSERS_PATH="/tmp/ms-playwright"
+          export CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_PATH="/tmp/playwright-driver"
+          cross build --release --locked --target ${{ matrix.target }}
 
       - name: Build (cargo)
         if: "!matrix.use_cross"
@@ -110,25 +108,9 @@ jobs:
           node_arch: ${{ matrix.node_arch }}
         run: |
           mkdir -p "npm/${{ matrix.node_pkg }}/bin/skills/openape"
-          node -e "
-            const fs = require('fs');
-            const pkg = '${{ matrix.node_pkg }}';
-            const version = '${{ steps.version.outputs.version }}';
-            const os_val = '${{ matrix.node_os }}';
-            const arch = '${{ matrix.node_arch }}';
-            const replace = (path, out) => {
-              let content = fs.readFileSync(path, 'utf8');
-              content = content.replaceAll('${node_pkg}', pkg)
-                               .replaceAll('${node_version}', version)
-                               .replaceAll('${node_os}', os_val)
-                               .replaceAll('${node_arch}', arch);
-              fs.writeFileSync(out, content);
-            };
-            replace('npm/package.json.tmpl', 'npm/${{ matrix.node_pkg }}/package.json');
-            replace('npm/jsr.json.tmpl', 'npm/${{ matrix.node_pkg }}/jsr.json');
-            // Create a dummy JS file for JSR satisfaction
-            fs.writeFileSync('npm/${{ matrix.node_pkg }}/bin/mod.js', 'export const version = \"' + version + '\";\n');
-          "
+          envsubst < npm/package.json.tmpl > "npm/${{ matrix.node_pkg }}/package.json"
+          envsubst < npm/jsr.json.tmpl > "npm/${{ matrix.node_pkg }}/jsr.json"
+          echo "export const version = \"${node_version}\";" > "npm/${{ matrix.node_pkg }}/bin/mod.js"
           cp skills/openape/SKILL.md "npm/${{ matrix.node_pkg }}/bin/skills/openape/SKILL.md"
           if [[ "${{ matrix.node_os }}" == "win32" ]]; then
             cp "target/${{ matrix.target }}/release/openape.exe" "npm/${{ matrix.node_pkg }}/bin/openape.exe"
@@ -169,30 +151,13 @@ jobs:
 
       - name: Update version in package.json
         working-directory: npm/app
-        env:
-          node_version: ${{ steps.version.outputs.version }}
         run: |
-          node -e "
-            const fs = require('fs');
-            const version = process.env.node_version;
-            
-            // Update package.json
-            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-            pkg.version = version;
-            if (pkg.optionalDependencies) {
-              for (const dep in pkg.optionalDependencies) {
-                if (dep.startsWith('@mo7yw4ng/openape-')) {
-                  pkg.optionalDependencies[dep] = version;
-                }
-              }
-            }
-            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
-            
-            // Update jsr.json
-            const jsr = JSON.parse(fs.readFileSync('jsr.json', 'utf8'));
-            jsr.version = version;
-            fs.writeFileSync('jsr.json', JSON.stringify(jsr, null, 2) + '\n');
-          "
+          VERSION=${{ steps.version.outputs.version }}
+          # Update version
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" package.json
+          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" jsr.json
+          # Update optionalDependencies
+          sed -i "s/\"@mo7yw4ng\/openape-\(.*\)\": \".*\"/\"@mo7yw4ng\/openape-\1\": \"$VERSION\"/g" package.json
 
       - name: Install dependencies & build
         working-directory: npm/app
