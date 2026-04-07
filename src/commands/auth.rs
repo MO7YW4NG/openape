@@ -36,7 +36,10 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
         crate::AuthCommands::Login => {
             check_for_update(&log).await;
             log.info("Launching browser for login...");
-            let (_browser, ws_token) = auth::launch_authenticated(&config, &log).await?;
+            let (launched, ws_token) = auth::launch_authenticated(&config, &log).await?;
+            // Close browser after login
+            auth::close_persistent_session(launched).await;
+            
             match ws_token {
                 Some(token) => {
                     log.success("Login successful!");

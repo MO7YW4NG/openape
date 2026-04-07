@@ -1,11 +1,12 @@
 use super::client::moodle_api_call;
 use crate::moodle_args;
-use crate::auth::cookies_to_cookie_header;
+use crate::auth::{Cookie, cookies_to_cookie_header};
 use super::course::get_site_info;
 use super::types::{SessionInfo, SuperVideoModule};
 use crate::logger::Logger;
 use reqwest::Client;
 use std::collections::HashMap;
+use chromiumoxide::Page;
 
 /// Get supervideos in a course via WS API.
 pub async fn get_supervideos_in_course_api(
@@ -191,22 +192,26 @@ fn extract_video_sources_from_html(html: &str, log: &Logger) -> anyhow::Result<V
 
 /// Extract video metadata from a supervideo page using an authenticated browser.
 pub async fn get_video_metadata_browser(
-    page: &playwright_rs::Page,
+    page: &Page,
     activity_url: &str,
     log: &Logger,
 ) -> anyhow::Result<VideoMetadata> {
     log.debug(&format!("Navigating to video page: {}", activity_url));
 
-    page.goto(activity_url, None)
+    page.goto(activity_url)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to navigate to video page: {}", e))?;
 
     // Wait for page content to load
     tokio::time::sleep(std::time::Duration::from_secs(2)).await;
 
-    let url = page.url();
-    if url.contains("login") || url.contains("microsoftonline") {
-        anyhow::bail!("Session invalid — redirected to login page");
+    let url = page.url()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to get page URL: {}", e))?;
+    if let Some(url_str) = url {
+        if url_str.contains("login") || url_str.contains("microsoftonline") {
+            anyhow::bail!("Session invalid — redirected to login page");
+        }
     }
 
     let html = page.content()
@@ -218,7 +223,7 @@ pub async fn get_video_metadata_browser(
 
 /// Download a video file using cookies extracted from a browser session.
 pub async fn download_video_with_cookies(
-    cookies: &[playwright_rs::protocol::Cookie],
+    cookies: &[Cookie],
     video_url: &str,
     output_path: &str,
     log: &Logger,

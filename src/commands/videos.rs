@@ -67,18 +67,14 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
 
             // Launch browser only for getting metadata
             let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
-            let (_playwright, browser_ctx) = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
-            let page = {
-                let pages = browser_ctx.pages();
-                if !pages.is_empty() { pages[0].clone() } else { browser_ctx.new_page().await? }
-            };
+            let launched = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
 
             let mut completed = 0;
             for v in &videos {
                 ctx.log.info(&format!("Processing: {}", v.name));
 
                 // 1. Get metadata via browser
-                let metadata = match get_video_metadata_browser(&page, &v.url, &ctx.log).await {
+                let metadata = match get_video_metadata_browser(&launched.page, &v.url, &ctx.log).await {
                     Ok(m) => m,
                     Err(e) => {
                         ctx.log.warn(&format!("  Failed to get metadata: {}", e));
@@ -107,7 +103,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 }
             }
 
-            crate::auth::close_persistent_session(browser_ctx).await;
+            crate::auth::close_persistent_session(launched).await;
             ctx.log.info(&format!("Completed {}/{} videos", completed, total));
             let result = serde_json::json!({
                 "action": "complete",
@@ -169,17 +165,13 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             }
 
             let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
-            let (_playwright, browser_ctx) = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
-            let page = {
-                let pages = browser_ctx.pages();
-                if !pages.is_empty() { pages[0].clone() } else { browser_ctx.new_page().await? }
-            };
+            let launched = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
 
             let mut completed = 0;
             for (cname, v) in &all_incomplete {
                 ctx.log.info(&format!("Processing [{}]: {}", cname, v.name));
 
-                let metadata = match get_video_metadata_browser(&page, &v.url, &ctx.log).await {
+                let metadata = match get_video_metadata_browser(&launched.page, &v.url, &ctx.log).await {
                     Ok(m) => m,
                     Err(e) => {
                         ctx.log.warn(&format!("  Failed to get metadata: {}", e));
@@ -206,7 +198,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 }
             }
 
-            crate::auth::close_persistent_session(browser_ctx).await;
+            crate::auth::close_persistent_session(launched).await;
             ctx.log.info(&format!("Completed {}/{} videos", completed, total));
             let result = serde_json::json!({
                 "action": "complete_all",
@@ -235,29 +227,14 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
 
             // Phase 2: Launch browser session for authenticated page access
             let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
-            let (_playwright, browser_ctx) = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
+            let launched = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
 
             // Extract cookies once for all downloads
-            let cookies = match browser_ctx.cookies(None).await {
+            let cookies = match crate::auth::get_cookies(&launched.page).await {
                 Ok(c) => c,
                 Err(e) => {
-                    crate::auth::close_persistent_session(browser_ctx).await;
+                    crate::auth::close_persistent_session(launched).await;
                     anyhow::bail!("Failed to extract cookies: {}", e);
-                }
-            };
-
-            let page = {
-                let pages = browser_ctx.pages();
-                if !pages.is_empty() {
-                    pages[0].clone()
-                } else {
-                    match browser_ctx.new_page().await {
-                        Ok(p) => p,
-                        Err(e) => {
-                            crate::auth::close_persistent_session(browser_ctx).await;
-                            anyhow::bail!("Failed to create page: {}", e);
-                        }
-                    }
                 }
             };
 
@@ -270,7 +247,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 ctx.log.info(&format!("Processing: {}", v.name));
 
                 // Extract metadata via browser navigation
-                let metadata = match get_video_metadata_browser(&page, &v.url, &ctx.log).await {
+                let metadata = match get_video_metadata_browser(&launched.page, &v.url, &ctx.log).await {
                     Ok(m) => m,
                     Err(e) => {
                         ctx.log.warn(&format!("  Failed to get metadata: {}", e));
@@ -332,7 +309,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             }
 
             // Phase 4: Close browser
-            crate::auth::close_persistent_session(browser_ctx).await;
+            crate::auth::close_persistent_session(launched).await;
 
             ctx.log.info(&format!("\nResult: {} downloaded, {} failed", downloaded, failed));
             format_and_output(&results, ctx.output, None);

@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   id-token: write
 
 jobs:
@@ -78,17 +78,10 @@ jobs:
       - name: Build (cross)
         if: matrix.use_cross
         run: cross build --release --locked --target ${{ matrix.target }}
-        env:
-          PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
 
       - name: Build (cargo)
         if: "!matrix.use_cross"
         run: cargo build --release --locked --target ${{ matrix.target }}
-        env:
-          PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
-          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
-          # If playwright-rs honors this in your version, also set:
-          PLAYWRIGHT_DRIVER_PATH: ${{ runner.temp }}/playwright-driver
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
@@ -122,6 +115,27 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Prepare binary for release
+        shell: bash
+        run: |
+          mkdir -p release
+          if [[ "${{ matrix.node_os }}" == "win32" ]]; then
+            cp "target/${{ matrix.target }}/release/openape.exe" "release/openape-${{ matrix.node_os }}-${{ matrix.node_arch }}.exe"
+            # Generate SHA256 checksum
+            cd release && sha256sum "openape-${{ matrix.node_os }}-${{ matrix.node_arch }}.exe" > "openape-${{ matrix.node_os }}-${{ matrix.node_arch }}.exe.sha256" && cd ..
+          else
+            cp "target/${{ matrix.target }}/release/openape" "release/openape-${{ matrix.node_os }}-${{ matrix.node_arch }}"
+            chmod +x "release/openape-${{ matrix.node_os }}-${{ matrix.node_arch }}"
+            # Generate SHA256 checksum
+            cd release && sha256sum "openape-${{ matrix.node_os }}-${{ matrix.node_arch }}" > "openape-${{ matrix.node_os }}-${{ matrix.node_arch }}.sha256" && cd ..
+          fi
+
+      - name: Upload binary to release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/*
 
   publish-base:
     name: Publish base npm package
