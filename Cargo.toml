@@ -1,6 +1,6 @@
 [package]
 name = "openape"
-version = "2.0.2"
+version = "2.0.3"
 edition = "2021"
 description = "CLI tool for CYCU i-Learning platform"
 
