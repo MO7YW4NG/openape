@@ -1,12 +1,18 @@
-name: Test Linux ARM64 Build
+name: CI
 
 on:
   workflow_dispatch:
 
 jobs:
   build:
-    name: linux-arm64
+    name: ${{ matrix.target }}
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-unknown-linux-gnu
+          - aarch64-unknown-linux-gnu
 
     steps:
       - uses: actions/checkout@v6
@@ -14,12 +20,12 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-unknown-linux-gnu
+          targets: ${{ matrix.target }}
 
       - name: Install cross
         run: cargo install cross
 
       - name: Build
-        run: cross build --release --locked --target aarch64-unknown-linux-gnu
+        run: cross build --release --locked --target ${{ matrix.target }}
         env:
           PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
