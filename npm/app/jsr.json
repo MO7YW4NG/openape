@@ -1,9 +1,0 @@
-{
-  "name": "@openape/openape",
-  "version": "2.0.0",
-  "license": "MIT",
-  "exports": "./bin/openape.ts",
-  "publish": {
-    "include": ["bin/", "README.md", "LICENSE"]
-  }
-}

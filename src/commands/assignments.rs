@@ -95,6 +95,14 @@ pub async fn run(cmd: &crate::AssignmentsCommands, cli: &Cli) -> Result<()> {
             ).await?;
 
             ctx.log.success("Assignment submitted successfully!");
+            let result = serde_json::json!({
+                "action": "submit",
+                "assignment_id": *assignment_id,
+                "success": true,
+                "file_id": effective_file_id,
+                "has_text": text.is_some(),
+            });
+            format_and_output(&[result], ctx.output, None);
         }
     }
 

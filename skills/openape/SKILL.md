@@ -93,6 +93,12 @@ openape <command> [subcommand] [args] [flags]
 
   - `file <file-path>` — Upload a file to Moodle draft area
 
+### pages — Page operations
+
+  - `list <course-id>` — List pages in a course (content preview, first 150 chars)
+  - `list-all` — List all pages across courses. Flags: `--level in_progress|all`
+  - `show <cmid>` — Show full content of a specific page
+
 ### skills — Skill management
 
   - `install [platform]` — Install OpenApe skill to an agent platform (claude, codex, opencode)

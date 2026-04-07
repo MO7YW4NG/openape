@@ -1,5 +1,6 @@
 pub mod client;
 pub mod assignment;
+pub mod page;
 pub mod calendar;
 pub mod course;
 pub mod forum;

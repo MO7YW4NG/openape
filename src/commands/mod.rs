@@ -1,4 +1,5 @@
 pub mod announcements;
+pub mod pages;
 pub mod assignments;
 pub mod auth;
 pub mod calendar;

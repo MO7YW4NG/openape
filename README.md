@@ -2,7 +2,6 @@
   <img src="assets/logo.svg" width="150" /><br/>
   OpenApe CLI (Unofficial)<br/>
   <a href="https://www.npmjs.com/package/@mo7yw4ng/openape"><img src="https://img.shields.io/npm/v/@mo7yw4ng/openape" alt="npm version" /></a>
-  <a href="https://jsr.io/@openape/openape"><img src="https://jsr.io/badges/@openape/openape" alt="JSR" /></a>
   <a href="https://www.npmjs.com/package/@mo7yw4ng/openape"><img src="https://img.shields.io/npm/dm/@mo7yw4ng/openape" alt="npm downloads" /></a>
 </h1>
 
@@ -27,11 +26,6 @@ npm install -g @mo7yw4ng/openape
 或用 npx 單次執行（不需安裝）：
 ```bash
 npx @mo7yw4ng/openape --help
-```
-
-或透過 JSR 安裝：
-```bash
-deno install -A -g -n openape jsr:@openape/openape
 ```
 
 ## 核心指令
@@ -104,6 +98,13 @@ openape assignments submit <assignment-id> # 繳交作業
 
 # 檔案上傳至草稿區
 openape upload file <path>                 # 上傳檔案取得 draft ID
+```
+
+### 頁面 (Pages)
+```bash
+openape pages list <course-id>     # 列出課程頁面 (內容預覽前 150 字)
+openape pages list-all             # 列出所有課程頁面 (支援 --level)
+openape pages show <cmid>          # 顯示頁面完整內容
 ```
 
 ### Skills

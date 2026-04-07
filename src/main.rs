@@ -80,6 +80,8 @@ enum Commands {
     #[command(subcommand)]
     Assignments(AssignmentsCommands),
     #[command(subcommand)]
+    Pages(PagesCommands),
+    #[command(subcommand)]
     Upload(UploadCommands),
     #[command(subcommand)]
     Skills(SkillsCommands),
@@ -365,6 +367,25 @@ pub enum UploadCommands {
     },
 }
 
+// ── Pages ─────────────────────────────────────────────────────────────────
+
+#[derive(Subcommand)]
+pub enum PagesCommands {
+    /// List pages in a course
+    List {
+        course_id: u64,
+    },
+    /// List all pages across all courses
+    ListAll {
+        #[arg(long, value_enum, default_value_t = CourseLevel::default())]
+        level: CourseLevel,
+    },
+    /// Show the content of a specific page
+    Show {
+        cmid: u64,
+    },
+}
+
 // ── Skills ────────────────────────────────────────────────────────────────
 
 #[derive(Subcommand)]
@@ -414,6 +435,7 @@ async fn run_command(cli: Cli) -> anyhow::Result<()> {
         Commands::Calendar(ref cmd) => commands::calendar::run(cmd, &cli).await,
         Commands::Assignments(ref cmd) => commands::assignments::run(cmd, &cli).await,
         Commands::Upload(ref cmd) => commands::upload::run(cmd, &cli).await,
-        Commands::Skills(ref cmd) => commands::skills::run(cmd).await,
+        Commands::Pages(ref cmd) => commands::pages::run(cmd, &cli).await,
+        Commands::Skills(ref cmd) => commands::skills::run(cmd, &cli).await,
     }
 }

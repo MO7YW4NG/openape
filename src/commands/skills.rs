@@ -64,7 +64,9 @@ async fn read_skill_content() -> Result<String> {
     resp.text().await.with_context(|| "Failed to read response body")
 }
 
-pub async fn run(cmd: &crate::SkillsCommands) -> Result<()> {
+pub async fn run(cmd: &crate::SkillsCommands, cli: &crate::Cli) -> Result<()> {
+    use crate::output::format_and_output;
+
     match cmd {
         crate::SkillsCommands::Install { platform, all } => {
             let mut targets: Vec<Platform> = Vec::new();
@@ -77,6 +79,13 @@ pub async fn run(cmd: &crate::SkillsCommands) -> Result<()> {
                 }
                 if targets.is_empty() {
                     eprintln!("No supported agents detected. Supported platforms: claude, codex, opencode");
+                    let result = serde_json::json!({
+                        "action": "install",
+                        "skill": SKILL_NAME,
+                        "platforms": [],
+                        "installed": false,
+                    });
+                    format_and_output(&[result], cli.output, None);
                     return Ok(());
                 }
             } else if let Some(ref p) = platform {
@@ -106,13 +115,23 @@ pub async fn run(cmd: &crate::SkillsCommands) -> Result<()> {
                 eprintln!("  {} installed to {}", SKILL_NAME, plat.name);
             }
 
-            eprintln!("\nDone!");
+            let result = serde_json::json!({
+                "action": "install",
+                "skill": SKILL_NAME,
+                "platforms": targets.iter().map(|p| p.name).collect::<Vec<_>>(),
+                "installed": true,
+            });
+            format_and_output(&[result], cli.output, None);
             Ok(())
         }
 
         crate::SkillsCommands::Show => {
             let content = read_skill_content().await?;
-            print!("{content}");
+            let result = serde_json::json!({
+                "name": SKILL_NAME,
+                "content": content,
+            });
+            format_and_output(&[result], cli.output, None);
             Ok(())
         }
     }

@@ -30,19 +30,38 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
 
         crate::VideosCommands::Complete { course_id, dry_run } => {
             let videos = get_incomplete_videos_api(&ctx.client, &ctx.session, *course_id).await?;
+            let total = videos.len();
 
             if videos.is_empty() {
                 ctx.log.info("All videos already complete (or no videos found).");
+                let result = serde_json::json!({
+                    "action": "complete",
+                    "course_id": *course_id,
+                    "total": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "dry_run": *dry_run,
+                });
+                format_and_output(&[result], ctx.output, None);
                 return Ok(());
             }
 
-            ctx.log.info(&format!("Found {} incomplete videos", videos.len()));
+            ctx.log.info(&format!("Found {} incomplete videos", total));
 
             if *dry_run {
                 for v in &videos {
                     ctx.log.info(&format!("  [dry-run] {}", v.name));
                 }
-                ctx.log.info(&format!("Would complete {} videos", videos.len()));
+                ctx.log.info(&format!("Would complete {} videos", total));
+                let result = serde_json::json!({
+                    "action": "complete",
+                    "course_id": *course_id,
+                    "total": total,
+                    "completed": 0,
+                    "failed": 0,
+                    "dry_run": true,
+                });
+                format_and_output(&[result], ctx.output, None);
                 return Ok(());
             }
 
@@ -57,7 +76,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             let mut completed = 0;
             for v in &videos {
                 ctx.log.info(&format!("Processing: {}", v.name));
-                
+
                 // 1. Get metadata via browser
                 let metadata = match get_video_metadata_browser(&page, &v.url, &ctx.log).await {
                     Ok(m) => m,
@@ -89,7 +108,16 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             }
 
             crate::auth::close_persistent_session(browser_ctx).await;
-            ctx.log.info(&format!("Completed {}/{} videos", completed, videos.len()));
+            ctx.log.info(&format!("Completed {}/{} videos", completed, total));
+            let result = serde_json::json!({
+                "action": "complete",
+                "course_id": *course_id,
+                "total": total,
+                "completed": completed,
+                "failed": total - completed,
+                "dry_run": false,
+            });
+            format_and_output(&[result], ctx.output, None);
         }
 
         crate::VideosCommands::CompleteAll { dry_run } => {
@@ -105,18 +133,38 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 }
             }
 
+            let total = all_incomplete.len();
+
             if all_incomplete.is_empty() {
                 ctx.log.info("No incomplete videos found.");
+                let result = serde_json::json!({
+                    "action": "complete_all",
+                    "courses_scanned": courses.len(),
+                    "total": 0,
+                    "completed": 0,
+                    "failed": 0,
+                    "dry_run": *dry_run,
+                });
+                format_and_output(&[result], ctx.output, None);
                 return Ok(());
             }
 
-            ctx.log.info(&format!("Found {} incomplete videos across all courses", all_incomplete.len()));
+            ctx.log.info(&format!("Found {} incomplete videos across all courses", total));
 
             if *dry_run {
                 for (cname, v) in &all_incomplete {
                     ctx.log.info(&format!("  [dry-run] [{}]: {}", cname, v.name));
                 }
-                ctx.log.info(&format!("Would complete {} videos", all_incomplete.len()));
+                ctx.log.info(&format!("Would complete {} videos", total));
+                let result = serde_json::json!({
+                    "action": "complete_all",
+                    "courses_scanned": courses.len(),
+                    "total": total,
+                    "completed": 0,
+                    "failed": 0,
+                    "dry_run": true,
+                });
+                format_and_output(&[result], ctx.output, None);
                 return Ok(());
             }
 
@@ -130,7 +178,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             let mut completed = 0;
             for (cname, v) in &all_incomplete {
                 ctx.log.info(&format!("Processing [{}]: {}", cname, v.name));
-                
+
                 let metadata = match get_video_metadata_browser(&page, &v.url, &ctx.log).await {
                     Ok(m) => m,
                     Err(e) => {
@@ -159,7 +207,16 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             }
 
             crate::auth::close_persistent_session(browser_ctx).await;
-            ctx.log.info(&format!("Completed {}/{} videos", completed, all_incomplete.len()));
+            ctx.log.info(&format!("Completed {}/{} videos", completed, total));
+            let result = serde_json::json!({
+                "action": "complete_all",
+                "courses_scanned": courses.len(),
+                "total": total,
+                "completed": completed,
+                "failed": total - completed,
+                "dry_run": false,
+            });
+            format_and_output(&[result], ctx.output, None);
         }
 
         crate::VideosCommands::Download { course_id, output_dir, incomplete_only } => {

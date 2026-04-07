@@ -305,6 +305,20 @@ pub struct Message {
     pub timecreated: i64,
 }
 
+// ── Pages ──────────────────────────────────────────────────────────────────
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageModule {
+    pub id: u64,
+    pub cmid: String,
+    pub name: String,
+    pub course_id: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timemodified: Option<i64>,
+}
+
 // ── Site Info ─────────────────────────────────────────────────────────────
 
 #[derive(Debug, Clone)]

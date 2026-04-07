@@ -146,6 +146,13 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             } else {
                 ctx.log.success(&format!("Answers saved. State: {}", state));
             }
+            let result = serde_json::json!({
+                "action": "save",
+                "attempt_id": *attempt_id,
+                "submitted": *submit,
+                "state": state,
+            });
+            format_and_output(&[result], ctx.output, None);
         }
     }
 

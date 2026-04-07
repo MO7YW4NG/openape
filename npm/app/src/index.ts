@@ -13,10 +13,12 @@ function getExePath(): string {
     ext = ".exe";
   }
 
-  const pkg = `openape-${os}-${arch}`;
+  const pkg = `@mo7yw4ng/openape-${os}-${arch}`;
   try {
-    return require.resolve(`${pkg}/bin/openape${ext}`);
-  } catch {
+    // Resolve the package directory instead of a specific file
+    const pkgJson = require.resolve(`${pkg}/package.json`);
+    return join(pkgJson, "..", "bin", `openape${ext}`);
+  } catch (e) {
     throw new Error(
       `Unsupported platform: ${process.platform} ${arch}\n` +
       `Try installing the platform package manually: npm install ${pkg}`

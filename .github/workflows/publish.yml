@@ -106,7 +106,6 @@ jobs:
         run: |
           mkdir -p "npm/${{ matrix.node_pkg }}/bin/skills/openape"
           envsubst < npm/package.json.tmpl > "npm/${{ matrix.node_pkg }}/package.json"
-          envsubst < npm/jsr.json.tmpl > "npm/${{ matrix.node_pkg }}/jsr.json"
           echo "export const version: string = \"${node_version}\";" > "npm/${{ matrix.node_pkg }}/bin/mod.ts"
           cp skills/openape/SKILL.md "npm/${{ matrix.node_pkg }}/bin/skills/openape/SKILL.md"
           cp README.md "npm/${{ matrix.node_pkg }}/README.md"
@@ -123,11 +122,6 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish platform package to JSR
-        working-directory: npm/${{ matrix.node_pkg }}
-        run: npx jsr publish --allow-dirty
-        continue-on-error: true
 
   publish-base:
     name: Publish base npm package
@@ -154,7 +148,6 @@ jobs:
           VERSION=${{ steps.version.outputs.version }}
           # Update version
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" package.json
-          sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" jsr.json
           # Update optionalDependencies
           sed -i "s/\"@mo7yw4ng\/openape-\(.*\)\": \".*\"/\"@mo7yw4ng\/openape-\1\": \"$VERSION\"/g" package.json
 
@@ -169,8 +162,3 @@ jobs:
         run: npm publish --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-      - name: Publish to JSR
-        working-directory: npm/app
-        run: npx jsr publish --allow-dirty
-        continue-on-error: true

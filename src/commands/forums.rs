@@ -67,6 +67,13 @@ pub async fn run(cmd: &crate::ForumsCommands, cli: &Cli) -> Result<()> {
                 Some(discussion_id) => {
                     ctx.log.success("Discussion posted successfully!");
                     ctx.log.info(&format!("  Discussion ID: {}", discussion_id));
+                    let result = serde_json::json!({
+                        "action": "post",
+                        "forum_id": *forum_id,
+                        "discussion_id": discussion_id,
+                        "success": true,
+                    });
+                    format_and_output(&[result], ctx.output, None);
                 }
                 None => {
                     anyhow::bail!("Post appeared to succeed but no discussion ID returned");
@@ -83,6 +90,13 @@ pub async fn run(cmd: &crate::ForumsCommands, cli: &Cli) -> Result<()> {
                 Some(new_post_id) => {
                     ctx.log.success("Reply posted successfully!");
                     ctx.log.info(&format!("  Post ID: {}", new_post_id));
+                    let result = serde_json::json!({
+                        "action": "reply",
+                        "post_id": *post_id,
+                        "new_post_id": new_post_id,
+                        "success": true,
+                    });
+                    format_and_output(&[result], ctx.output, None);
                 }
                 None => {
                     anyhow::bail!("Reply appeared to succeed but no post ID returned");
@@ -94,6 +108,12 @@ pub async fn run(cmd: &crate::ForumsCommands, cli: &Cli) -> Result<()> {
             let ok = delete_post_api(&ctx.client, &ctx.session, *post_id).await?;
             if ok {
                 ctx.log.success(&format!("Post {} deleted successfully!", post_id));
+                let result = serde_json::json!({
+                    "action": "delete",
+                    "post_id": *post_id,
+                    "success": true,
+                });
+                format_and_output(&[result], ctx.output, None);
             } else {
                 anyhow::bail!("Failed to delete post {}", post_id);
             }

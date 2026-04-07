@@ -3,6 +3,7 @@ use crate::Cli;
 use crate::config::load_config;
 use crate::logger::Logger;
 use crate::auth;
+use crate::output::format_and_output;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 const CRATES_IO_API: &str = "https://crates.io/api/v1/crates/openape";
@@ -40,16 +41,32 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
                 Some(token) => {
                     log.success("Login successful!");
                     log.info(&format!("WS Token: {}...", &token[..token.len().min(20)]));
+                    let result = serde_json::json!({
+                        "action": "login",
+                        "success": true,
+                        "ws_token_prefix": &token[..token.len().min(20)],
+                        "version": CURRENT_VERSION,
+                    });
+                    format_and_output(&[result], cli.output, None);
                 }
                 None => {
                     log.warn("Logged in but could not acquire WS token. Some commands may not work.");
+                    let result = serde_json::json!({
+                        "action": "login",
+                        "success": true,
+                        "ws_token_prefix": null,
+                        "warning": "Could not acquire WS token",
+                        "version": CURRENT_VERSION,
+                    });
+                    format_and_output(&[result], cli.output, None);
                 }
             }
         }
 
         crate::AuthCommands::Status => {
             let (has_sesskey, sesskey, ws_token) = auth::check_session_status(&config);
-            if has_sesskey || ws_token.is_some() {
+            let active = has_sesskey || ws_token.is_some();
+            if active {
                 log.success("Session active");
                 if let Some(sk) = &sesskey {
                     log.info(&format!("  sesskey: {}", sk));
@@ -60,11 +77,23 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
             } else {
                 log.warn("No active session found. Run 'openape auth login' to log in.");
             }
+            let result = serde_json::json!({
+                "action": "status",
+                "active": active,
+                "sesskey": sesskey.as_deref().map(|s| &s[..s.len().min(20)]),
+                "ws_token_prefix": ws_token.as_deref().map(|t| &t[..t.len().min(20)]),
+            });
+            format_and_output(&[result], cli.output, None);
         }
 
         crate::AuthCommands::Logout => {
             auth::logout(&config);
             log.success("Session cleared.");
+            let result = serde_json::json!({
+                "action": "logout",
+                "success": true,
+            });
+            format_and_output(&[result], cli.output, None);
         }
     }
 
