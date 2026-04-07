@@ -1,15 +1,7 @@
 name: CI
 
 on:
-  push:
-    branches: [rust-rewrite]
-    paths:
-      - 'src/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - 'Cross.toml'
-  pull_request:
-    branches: [rust-rewrite]
+  workflow_dispatch:
 
 jobs:
   build:
