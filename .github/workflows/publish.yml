@@ -79,7 +79,7 @@ jobs:
         if: matrix.use_cross
         run: cross build --release --locked --target ${{ matrix.target }}
         env:
-          PLAYWRIGHT_DRIVER_VERSION: "1.42.0"
+          CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_VERSION: "1.42.0"
 
       - name: Build (cargo)
         if: "!matrix.use_cross"
@@ -104,18 +104,22 @@ jobs:
           mkdir -p "npm/${{ matrix.node_pkg }}/bin/skills/openape"
           node -e "
             const fs = require('fs');
+            const pkg = '${{ matrix.node_pkg }}';
+            const version = '${{ steps.version.outputs.version }}';
+            const os_val = '${{ matrix.node_os }}';
+            const arch = '${{ matrix.node_arch }}';
             const replace = (path, out) => {
               let content = fs.readFileSync(path, 'utf8');
-              content = content.replaceAll('${node_pkg}', process.env.node_pkg)
-                               .replaceAll('${node_version}', process.env.node_version)
-                               .replaceAll('${node_os}', process.env.node_os)
-                               .replaceAll('${node_arch}', process.env.node_arch);
+              content = content.replaceAll('${node_pkg}', pkg)
+                               .replaceAll('${node_version}', version)
+                               .replaceAll('${node_os}', os_val)
+                               .replaceAll('${node_arch}', arch);
               fs.writeFileSync(out, content);
             };
             replace('npm/package.json.tmpl', 'npm/${{ matrix.node_pkg }}/package.json');
             replace('npm/jsr.json.tmpl', 'npm/${{ matrix.node_pkg }}/jsr.json');
             // Create a dummy JS file for JSR satisfaction
-            fs.writeFileSync('npm/${{ matrix.node_pkg }}/bin/mod.js', 'export const version = \"' + process.env.node_version + '\";\n');
+            fs.writeFileSync('npm/${{ matrix.node_pkg }}/bin/mod.js', 'export const version = \"' + version + '\";\n');
           "
           cp skills/openape/SKILL.md "npm/${{ matrix.node_pkg }}/bin/skills/openape/SKILL.md"
           if [[ "${{ matrix.node_os }}" == "win32" ]]; then
