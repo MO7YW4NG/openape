@@ -150,6 +150,8 @@ jobs:
           sed -i "s/\"version\": \".*\"/\"version\": \"$VERSION\"/g" package.json
           # Update optionalDependencies
           sed -i "s/\"@mo7yw4ng\/openape-\(.*\)\": \".*\"/\"@mo7yw4ng\/openape-\1\": \"$VERSION\"/g" package.json
+          cp ../../README.md README.md
+          cp ../../LICENSE LICENSE
 
       - name: Install dependencies & build
         working-directory: npm/app
