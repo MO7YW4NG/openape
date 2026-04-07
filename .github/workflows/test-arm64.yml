@@ -1,0 +1,25 @@
+name: Test Linux ARM64 Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: linux-arm64
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-unknown-linux-gnu
+
+      - name: Install cross
+        run: cargo install cross
+
+      - name: Build
+        run: cross build --release --locked --target aarch64-unknown-linux-gnu
+        env:
+          PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
