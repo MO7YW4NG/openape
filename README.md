@@ -2,7 +2,6 @@
   <img src="assets/logo.svg" width="150" /><br/>
   OpenApe CLI (Unofficial)<br/>
   <a href="https://www.npmjs.com/package/@mo7yw4ng/openape"><img src="https://img.shields.io/npm/v/@mo7yw4ng/openape" alt="npm version" /></a>
-  <a href="https://jsr.io/@openape/openape"><img src="https://jsr.io/badges/@openape/openape" alt="JSR" /></a>
   <a href="https://www.npmjs.com/package/@mo7yw4ng/openape"><img src="https://img.shields.io/npm/dm/@mo7yw4ng/openape" alt="npm downloads" /></a>
 </h1>
 
@@ -27,11 +26,6 @@ npm install -g @mo7yw4ng/openape
 或用 npx 單次執行（不需安裝）：
 ```bash
 npx @mo7yw4ng/openape --help
-```
-
-或透過 Deno/JSR 安裝：
-```bash
-deno install -A -g -n openape jsr:@openape/openape
 ```
 
 ## 核心指令
@@ -106,6 +100,13 @@ openape assignments submit <assignment-id> # 繳交作業
 openape upload file <path>                 # 上傳檔案取得 draft ID
 ```
 
+### 頁面 (Pages)
+```bash
+openape pages list <course-id>     # 列出課程頁面 (內容預覽前 150 字)
+openape pages list-all             # 列出所有課程頁面 (支援 --level)
+openape pages show <cmid>          # 顯示頁面完整內容
+```
+
 ### Skills
 讓你的 AI Agent 也可以控制 OpenApe。只需一個指令即可安裝：
 ```bash
@@ -119,16 +120,14 @@ npx skills add mo7yw4ng/openape
 
 ## 開發
 
-專案使用 [Deno](https://deno.land/) 開發，歡迎一同貢獻：
-
 ```bash
 git clone https://github.com/mo7yw4ng/openape && cd openape
 
-# 啟動開發伺服器 (將直接執行 src/index.ts)
-deno task dev
+# 建置 (需安裝 Playwright 瀏覽器支援: Edge/Chrome/Brave)
+cargo build
 
-# 編譯成各平台執行檔 (預設輸出到 dist/OpenApe.exe)
-deno task compile
+# 執行
+cargo run -- --help
 ```
 
 ## 版權與授權
