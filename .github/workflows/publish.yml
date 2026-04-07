@@ -79,13 +79,21 @@ jobs:
         if: matrix.use_cross
         run: cross build --release --locked --target ${{ matrix.target }}
         env:
-          CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_VERSION: "1.42.0"
+          # Make it visible to the host process invoking cross (often needed)
+          PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
+          CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
+          CROSS_CONTAINER_ENV_PLAYWRIGHT_BROWSERS_PATH: /tmp/ms-playwright
+          # Optional if supported:
+          CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_PATH: /tmp/playwright-driver
 
       - name: Build (cargo)
         if: "!matrix.use_cross"
         run: cargo build --release --locked --target ${{ matrix.target }}
         env:
-          PLAYWRIGHT_DRIVER_VERSION: "1.42.0"
+          PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
+          PLAYWRIGHT_BROWSERS_PATH: ${{ runner.temp }}/ms-playwright
+          # If playwright-rs honors this in your version, also set:
+          PLAYWRIGHT_DRIVER_PATH: ${{ runner.temp }}/playwright-driver
 
       - name: Setup Node.js
         uses: actions/setup-node@v6
