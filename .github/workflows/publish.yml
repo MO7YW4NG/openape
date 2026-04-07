@@ -77,12 +77,9 @@ jobs:
 
       - name: Build (cross)
         if: matrix.use_cross
-        run: |
-          export PLAYWRIGHT_DRIVER_VERSION="1.49.0"
-          export CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_VERSION="1.49.0"
-          export CROSS_CONTAINER_ENV_PLAYWRIGHT_BROWSERS_PATH="/tmp/ms-playwright"
-          export CROSS_CONTAINER_ENV_PLAYWRIGHT_DRIVER_PATH="/tmp/playwright-driver"
-          cross build --release --locked --target ${{ matrix.target }}
+        run: cross build --release --locked --target ${{ matrix.target }}
+        env:
+          PLAYWRIGHT_DRIVER_VERSION: "1.49.0"
 
       - name: Build (cargo)
         if: "!matrix.use_cross"
