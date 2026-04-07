@@ -29,7 +29,7 @@ npm install -g @mo7yw4ng/openape
 npx @mo7yw4ng/openape --help
 ```
 
-或透過 Deno/JSR 安裝：
+或透過 JSR 安裝：
 ```bash
 deno install -A -g -n openape jsr:@openape/openape
 ```
@@ -119,16 +119,14 @@ npx skills add mo7yw4ng/openape
 
 ## 開發
 
-專案使用 [Deno](https://deno.land/) 開發，歡迎一同貢獻：
-
 ```bash
 git clone https://github.com/mo7yw4ng/openape && cd openape
 
-# 啟動開發伺服器 (將直接執行 src/index.ts)
-deno task dev
+# 建置 (需安裝 Playwright 瀏覽器支援: Edge/Chrome/Brave)
+cargo build
 
-# 編譯成各平台執行檔 (預設輸出到 dist/OpenApe.exe)
-deno task compile
+# 執行
+cargo run -- --help
 ```
 
 ## 版權與授權

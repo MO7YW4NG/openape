@@ -107,8 +107,10 @@ jobs:
           mkdir -p "npm/${{ matrix.node_pkg }}/bin/skills/openape"
           envsubst < npm/package.json.tmpl > "npm/${{ matrix.node_pkg }}/package.json"
           envsubst < npm/jsr.json.tmpl > "npm/${{ matrix.node_pkg }}/jsr.json"
-          echo "export const version = \"${node_version}\";" > "npm/${{ matrix.node_pkg }}/bin/mod.js"
+          echo "export const version: string = \"${node_version}\";" > "npm/${{ matrix.node_pkg }}/bin/mod.ts"
           cp skills/openape/SKILL.md "npm/${{ matrix.node_pkg }}/bin/skills/openape/SKILL.md"
+          cp README.md "npm/${{ matrix.node_pkg }}/README.md"
+          cp LICENSE "npm/${{ matrix.node_pkg }}/LICENSE"
           if [[ "${{ matrix.node_os }}" == "win32" ]]; then
             cp "target/${{ matrix.target }}/release/openape.exe" "npm/${{ matrix.node_pkg }}/bin/openape.exe"
           else
