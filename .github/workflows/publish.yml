@@ -170,7 +170,7 @@ jobs:
       - name: Install dependencies & build
         working-directory: npm/app
         run: |
-          npm ci
+          npm install
           npm run build
 
       - name: Publish to npm
