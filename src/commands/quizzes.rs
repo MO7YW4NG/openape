@@ -6,7 +6,7 @@ use crate::moodle::quiz::{
     get_all_quiz_attempt_data_api, process_quiz_attempt_api,
 };
 use crate::output::format_and_output;
-use crate::utils::{format_moodle_date, strip_html_tags};
+use crate::utils::{format_moodle_date};
 use super::{ApiCtx, level_to_classification};
 
 pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
@@ -77,13 +77,26 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
                     ctx.log.info(&format!("  Note: {}", msg));
                 }
             }
-            let item = serde_json::json!({
+
+            // Auto-fetch questions like the TS version
+            let data = get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, attempt.attemptid).await?;
+            let questions: Vec<serde_json::Value> = data.questions.values()
+                .map(|q| format_question_json(q))
+                .collect();
+            let total = questions.len();
+
+            let mut items: Vec<serde_json::Value> = vec![serde_json::json!({
+                "_type": "attempt",
                 "attemptId": attempt.attemptid,
                 "quizId": attempt.quizid,
                 "state": attempt.state,
-                "startPage": result.page.unwrap_or(0),
-            });
-            format_and_output(&[item], ctx.output, None);
+                "timeStart": format_moodle_date(Some(attempt.timestart)),
+                "timeFinish": format_moodle_date(attempt.timefinish),
+                "isPreview": attempt.preview,
+                "totalQuestions": total,
+            })];
+            items.extend(questions);
+            format_and_output(&items, ctx.output, None);
         }
 
         crate::QuizzesCommands::Info { attempt_id, page } => {
@@ -95,19 +108,24 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
                 ).await?
             };
 
-            let mut questions: Vec<serde_json::Value> = data.questions.values().map(|q| serde_json::json!({
-                "slot": q.slot,
-                "type": q.qtype,
-                "maxmark": q.maxmark,
-                "status": q.status,
-                "questionnumber": q.questionnumber,
-                "html": q.html.as_deref().map(strip_html_tags),
-            })).collect();
-
+            let mut questions: Vec<serde_json::Value> = data.questions.values()
+                .map(|q| format_question_json(q))
+                .collect();
             questions.sort_by_key(|q| q.get("slot").and_then(|v| v.as_u64()).unwrap_or(0));
 
-            ctx.log.info(&format!("Attempt {} has {} questions", attempt_id, questions.len()));
-            format_and_output(&questions, ctx.output, None);
+            // First row: attempt metadata, then each question as a separate NDJSON row
+            let total = questions.len();
+            let mut items: Vec<serde_json::Value> = vec![serde_json::json!({
+                "_type": "attempt",
+                "attemptId": data.attempt.attemptid,
+                "quizId": data.attempt.quizid,
+                "state": data.attempt.state,
+                "totalQuestions": total,
+            })];
+            items.extend(questions);
+
+            ctx.log.info(&format!("Attempt {} has {} questions", attempt_id, total));
+            format_and_output(&items, ctx.output, None);
         }
 
         crate::QuizzesCommands::Save { attempt_id, answers, submit } => {
@@ -153,4 +171,17 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Format a QuizQuestion into a JSON value with parsed fields.
+fn format_question_json(q: &crate::moodle::types::QuizQuestion) -> serde_json::Value {
+    serde_json::json!({
+        "slot": q.slot,
+        "type": q.qtype,
+        "status": q.status,
+        "stateclass": q.stateclass,
+        "savedAnswer": q.saved_answer,
+        "question": q.question_text,
+        "options": q.options,
+    })
 }

@@ -66,3 +66,75 @@ pub fn format_moodle_date(timestamp: Option<i64>) -> String {
         _ => "無期限".to_string(),
     }
 }
+
+/// Strip HTML tags but preserve line breaks from <br> and </p>.
+pub fn strip_html_keep_lines(html: &str) -> String {
+    if html.is_empty() {
+        return String::new();
+    }
+    let text = Regex::new(r"<br\s*/?>").unwrap()
+        .replace_all(html, "\n");
+    let text = Regex::new(r"</p>").unwrap()
+        .replace_all(&text, "\n");
+    let text = Regex::new(r"<[^>]+>").unwrap()
+        .replace_all(&text, "");
+    let text = text.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'");
+    Regex::new(r"\n{3,}").unwrap()
+        .replace_all(&text.trim(), "\n\n")
+        .trim()
+        .to_string()
+}
+
+/// Parse quiz question HTML into structured text and options.
+pub fn parse_question_html(html: &str) -> (String, Vec<String>) {
+    let qtext_re = Regex::new(r#"<div class="qtext">(.*?)</div>\s*</div>"#).unwrap();
+    let text = match qtext_re.captures(html) {
+        Some(caps) => strip_html_keep_lines(&caps[1]),
+        None => String::new(),
+    };
+
+    let option_re = Regex::new(r#"data-region="answer-label">(.*?)</div>\s*</div>"#).unwrap();
+    let options: Vec<String> = option_re.captures_iter(html)
+        .filter_map(|caps| {
+            let stripped = strip_html_keep_lines(&caps[1]);
+            if stripped.is_empty() { None } else { Some(stripped) }
+        })
+        .collect();
+
+    (text, options)
+}
+
+/// Parse the saved/selected answer from quiz question HTML.
+pub fn parse_saved_answer(html: &str) -> Option<serde_json::Value> {
+    // Single choice: <input type="radio" ... value="N" ... checked="checked">
+    let radio_re = Regex::new(r#"<input type="radio"[^>]*value="(\d+)"[^>]*checked="checked""#).unwrap();
+    if let Some(caps) = radio_re.captures(html) {
+        if &caps[1] != "-1" {
+            return Some(serde_json::Value::String(caps[1].to_string()));
+        }
+    }
+
+    // Multiple choice: checkboxes with checked="checked"
+    let checkbox_re = Regex::new(r#"<input type="checkbox"[^>]*name="[^"]*choice(\d+)"[^>]*checked="checked""#).unwrap();
+    let checked: Vec<String> = checkbox_re.captures_iter(html)
+        .map(|caps| caps[1].to_string())
+        .collect();
+    if !checked.is_empty() {
+        return Some(serde_json::Value::String(checked.join(",")));
+    }
+
+    // Short answer: <input ... name="...:_answer" ... value="text">
+    let text_re = Regex::new(r#"<input[^>]*(?:name="[^"]*:_answer"|type="text")[^>]*(?:name="[^"]*:_answer"|type="text")[^>]*value="([^"]*)""#).unwrap();
+    if let Some(caps) = text_re.captures(html) {
+        if !caps[1].is_empty() {
+            return Some(serde_json::Value::String(caps[1].to_string()));
+        }
+    }
+
+    None
+}

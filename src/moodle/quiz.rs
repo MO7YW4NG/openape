@@ -1,6 +1,7 @@
 use super::client::moodle_api_call;
 use crate::moodle_args;
 use super::types::{QuizAttempt, QuizAttemptData, QuizModule, QuizQuestion, QuizStartResult, SessionInfo};
+use crate::utils::{parse_question_html, parse_saved_answer};
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -109,7 +110,8 @@ pub async fn start_quiz_attempt_api(
         attempt: QuizAttempt {
             attempt: attempt_id,
             attemptid: attempt_id,
-            quizid: attempt.get("quizid").and_then(|v| v.as_u64()).unwrap_or(0),
+            quizid: attempt.get("quizid").or_else(|| attempt.get("quiz"))
+                .and_then(|v| v.as_u64()).unwrap_or(0),
             userid: attempt.get("userid").and_then(|v| v.as_u64()).unwrap_or(0),
             attemptnumber: attempt.get("attemptnumber").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
             state: attempt.get("state").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -118,7 +120,6 @@ pub async fn start_quiz_attempt_api(
             uniqueid: attempt.get("uniqueid").and_then(|v| v.as_u64()),
             preview: attempt.get("preview").and_then(|v| v.as_i64()) == Some(1),
         },
-        page: data.get("page").and_then(|v| v.as_i64()).map(|p| p as i32),
         messages: data.get("messages").and_then(|m| m.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
     })
@@ -141,9 +142,25 @@ pub async fn get_quiz_attempt_data_api(
         .and_then(|v| v.as_u64()).unwrap_or(0);
 
     let mut questions = HashMap::new();
-    if let Some(qs) = data.get("questions").and_then(|q| q.as_object()) {
-        for (slot, question) in qs {
+    if let Some(qs_raw) = data.get("questions") {
+        let question_entries: Vec<(String, &Value)> = if let Some(arr) = qs_raw.as_array() {
+            // Moodle returns questions as an array — use "slot" field as key
+            arr.iter().filter_map(|q| {
+                let slot = q.get("slot").and_then(|v| v.as_u64())?;
+                Some((slot.to_string(), q))
+            }).collect()
+        } else if let Some(obj) = qs_raw.as_object() {
+            obj.iter().map(|(k, v)| (k.clone(), v)).collect()
+        } else {
+            Vec::new()
+        };
+
+        for (slot, question) in question_entries {
             if let Ok(slot_num) = slot.parse::<u32>() {
+                let html_raw = question.get("html").and_then(|v| v.as_str()).unwrap_or("");
+                let (qtext, opts) = parse_question_html(html_raw);
+                let saved = parse_saved_answer(html_raw);
+
                 questions.insert(slot_num, QuizQuestion {
                     slot: question.get("slot").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
                     qtype: question.get("type").and_then(|v| v.as_str()).unwrap_or("").to_string(),
@@ -151,11 +168,14 @@ pub async fn get_quiz_attempt_data_api(
                     maxmark: question.get("maxmark").and_then(|v| v.as_f64()).unwrap_or(0.0),
                     page: question.get("page").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
                     quizid: question.get("quizid").and_then(|v| v.as_u64()).unwrap_or(0),
-                    html: question.get("html").and_then(|v| v.as_str()).map(String::from),
+                    html: Some(html_raw.to_string()),
                     status: question.get("status").and_then(|v| v.as_str()).map(String::from),
                     stateclass: question.get("stateclass").and_then(|v| v.as_str()).map(String::from),
                     sequencecheck: question.get("sequencecheck").and_then(|v| v.as_u64()),
                     questionnumber: question.get("questionnumber").and_then(|v| v.as_str()).map(String::from),
+                    saved_answer: saved,
+                    question_text: if qtext.is_empty() { None } else { Some(qtext) },
+                    options: opts,
                 });
             }
         }
@@ -166,7 +186,8 @@ pub async fn get_quiz_attempt_data_api(
             attempt: a_id,
             attemptid: a_id,
             uniqueid: attempt.get("uniqueid").and_then(|v| v.as_u64()),
-            quizid: attempt.get("quizid").and_then(|v| v.as_u64()).unwrap_or(0),
+            quizid: attempt.get("quizid").or_else(|| attempt.get("quiz"))
+                .and_then(|v| v.as_u64()).unwrap_or(0),
             userid: attempt.get("userid").and_then(|v| v.as_u64()).unwrap_or(0),
             attemptnumber: attempt.get("attemptnumber").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
             state: attempt.get("state").and_then(|v| v.as_str()).unwrap_or("").to_string(),

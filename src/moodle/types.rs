@@ -93,6 +93,12 @@ pub struct QuizQuestion {
     pub sequencecheck: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub questionnumber: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub saved_answer: Option<serde_json::Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question_text: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub options: Vec<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +111,6 @@ pub struct QuizAttemptData {
 #[derive(Debug, Clone)]
 pub struct QuizStartResult {
     pub attempt: QuizAttempt,
-    pub page: Option<i32>,
     pub messages: Option<Vec<String>>,
 }
 
