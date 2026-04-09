@@ -61,6 +61,7 @@ openape quizzes list-all             # 列出所有課程測驗
 openape quizzes start <quiz-id>      # 開始測驗
 openape quizzes info <attempt-id>    # 查看測驗題目
 openape quizzes save <attempt-id> '<answers>' # 儲存測驗答案
+openape quizzes submit <attempt-id>           # 送出目前已儲存的測驗答案
 openape materials list-all           # 列出所有可下載教材
 openape materials download <id>      # 下載指定教材 (支援 --output-dir)
 openape materials download-all       # 批次下載教材 (支援 --output-dir, --level)

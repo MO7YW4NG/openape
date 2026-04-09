@@ -45,7 +45,8 @@ openape <command> [subcommand] [args] [flags]
   - `list-all` — List all incomplete quizzes across courses. Flags: `--level in_progress|all`
   - `start <quiz-id>` — Start a new quiz attempt
   - `info <attempt-id>` — Get quiz attempt data and questions. Flags: `--page <number>`
-  - `save <attempt-id> '<answers-json>'` — Save answers for a quiz attempt. Flags: `--submit`. JSON format: `[{"slot":1,"answer":"0"}]`. Multichoice: number, multichoices: `"0,2"`, shortanswer: text
+  - `save <attempt-id> '<answers-json>'` — Save answers for a quiz attempt. JSON format: `[{"slot":1,"answer":"0"}]`. Multichoice: number, multichoices: `"0,2"`, shortanswer: text
+  - `submit <attempt-id>` — Submit a quiz attempt using currently saved answers
 
 > **NEVER SUBMIT WITHOUT USER'S PERMISSION**, you have to make sure answer is saved before submitting.
 

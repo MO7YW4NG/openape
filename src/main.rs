@@ -197,8 +197,10 @@ pub enum QuizzesCommands {
         attempt_id: u64,
         #[arg(value_name = "ANSWERS_JSON_OR_DELIMITED")]
         answers: String,
-        #[arg(long)]
-        submit: bool,
+    },
+    /// Submit a quiz attempt using currently saved answers
+    Submit {
+        attempt_id: u64,
     },
 }
 

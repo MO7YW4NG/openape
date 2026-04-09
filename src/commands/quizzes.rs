@@ -129,7 +129,7 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             format_and_output(&items, ctx.output, None);
         }
 
-        crate::QuizzesCommands::Save { attempt_id, answers, submit } => {
+        crate::QuizzesCommands::Save { attempt_id, answers } => {
             // Get attempt data first for unique_id and sequence_checks
             let data = get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, *attempt_id).await?;
             let unique_id = data.attempt.uniqueid
@@ -159,18 +159,54 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
                 *attempt_id, unique_id,
                 &parsed_answers, &sequence_checks,
                 &checkbox_slots,
-                *submit,
+                false,
             ).await?;
 
-            if *submit {
-                ctx.log.success(&format!("Quiz submitted! State: {}", state));
-            } else {
-                ctx.log.success(&format!("Answers saved. State: {}", state));
-            }
+            ctx.log.success(&format!("Answers saved. State: {}", state));
             let result = serde_json::json!({
                 "action": "save",
                 "attempt_id": *attempt_id,
-                "submitted": *submit,
+                "submitted": false,
+                "state": state,
+            });
+            format_and_output(&[result], ctx.output, None);
+        }
+
+        crate::QuizzesCommands::Submit { attempt_id } => {
+            // Submit the attempt as-is, reusing answers already saved on Moodle.
+            let data = get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, *attempt_id).await?;
+            let unique_id = data.attempt.uniqueid
+                .ok_or_else(|| anyhow::anyhow!("Could not get attempt unique ID"))?;
+
+            let sequence_checks: std::collections::HashMap<u32, u64> = data.questions.iter()
+                .filter_map(|(&slot, q)| q.sequencecheck.map(|sc| (slot, sc)))
+                .collect();
+
+            let checkbox_slots: HashSet<u32> = data.questions.iter()
+                .filter_map(|(&slot, q)| {
+                    let html = q.html.as_deref().unwrap_or("");
+                    if html.contains("type=\"checkbox\"") || html.contains("type='checkbox'") {
+                        Some(slot)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+
+            let parsed_answers: Vec<(u32, String)> = Vec::new();
+            let state = process_quiz_attempt_api(
+                &ctx.client, &ctx.session,
+                *attempt_id, unique_id,
+                &parsed_answers, &sequence_checks,
+                &checkbox_slots,
+                true,
+            ).await?;
+
+            ctx.log.success(&format!("Quiz submitted! State: {}", state));
+            let result = serde_json::json!({
+                "action": "submit",
+                "attempt_id": *attempt_id,
+                "submitted": true,
                 "state": state,
             });
             format_and_output(&[result], ctx.output, None);
