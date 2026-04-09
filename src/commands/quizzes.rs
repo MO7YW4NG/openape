@@ -7,10 +7,11 @@ use crate::moodle::quiz::{
 };
 use crate::output::format_and_output;
 use crate::utils::{format_moodle_date};
-use super::{ApiCtx, level_to_classification};
+use super::{ApiCtx, in_progress_all_to_classification};
+use std::collections::HashSet;
 
 pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::QuizzesCommands::List { course_id, all } => {
@@ -38,7 +39,7 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
         }
 
         crate::QuizzesCommands::ListAll { level, all } => {
-            let classification = level_to_classification(*level);
+            let classification = in_progress_all_to_classification(*level);
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
             let course_ids: Vec<u64> = courses.iter().map(|c| c.id).collect();
             let quizzes = get_quizzes_by_courses_api(&ctx.client, &ctx.session, &course_ids).await?;
@@ -134,24 +135,30 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             let unique_id = data.attempt.uniqueid
                 .ok_or_else(|| anyhow::anyhow!("Could not get attempt unique ID"))?;
 
-            // Parse answers: "slot:answer,slot:answer" format
-            let parsed_answers: Vec<(u32, String)> = answers.split(';')
-                .filter_map(|pair| {
-                    let mut parts = pair.splitn(2, ':');
-                    let slot: u32 = parts.next()?.trim().parse().ok()?;
-                    let answer = parts.next()?.trim().to_string();
-                    Some((slot, answer))
-                })
-                .collect();
+            // Parse answers from either JSON or escaped delimiter format.
+            let parsed_answers = parse_answers_input(answers)?;
 
             let sequence_checks: std::collections::HashMap<u32, u64> = data.questions.iter()
                 .filter_map(|(&slot, q)| q.sequencecheck.map(|sc| (slot, sc)))
+                .collect();
+
+            // Detect checkbox-style multichoice questions from HTML so only those use choiceN submission.
+            let checkbox_slots: HashSet<u32> = data.questions.iter()
+                .filter_map(|(&slot, q)| {
+                    let html = q.html.as_deref().unwrap_or("");
+                    if html.contains("type=\"checkbox\"") || html.contains("type='checkbox'") {
+                        Some(slot)
+                    } else {
+                        None
+                    }
+                })
                 .collect();
 
             let state = process_quiz_attempt_api(
                 &ctx.client, &ctx.session,
                 *attempt_id, unique_id,
                 &parsed_answers, &sequence_checks,
+                &checkbox_slots,
                 *submit,
             ).await?;
 
@@ -184,4 +191,249 @@ fn format_question_json(q: &crate::moodle::types::QuizQuestion) -> serde_json::V
         "question": q.question_text,
         "options": q.options,
     })
+}
+
+
+fn parse_answers_input(raw: &str) -> anyhow::Result<Vec<(u32, String)>> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("Answers input is empty");
+    }
+
+    if trimmed.starts_with('[') {
+        if let Ok(parsed) = parse_answers_json(trimmed) {
+            return Ok(parsed);
+        }
+        if let Ok(parsed) = parse_answers_relaxed_object_list(trimmed) {
+            return Ok(parsed);
+        }
+        anyhow::bail!(
+            "Invalid answers JSON-like input. Expected JSON array of slot/answer objects"
+        );
+    }
+
+    parse_answers_delimited(trimmed)
+}
+
+fn parse_answers_json(raw: &str) -> anyhow::Result<Vec<(u32, String)>> {
+    #[derive(serde::Deserialize)]
+    struct JsonAnswer {
+        slot: u32,
+        answer: serde_json::Value,
+    }
+
+    let parsed: Vec<JsonAnswer> = serde_json::from_str(raw)
+        .map_err(|e| anyhow::anyhow!(
+            "Invalid answers JSON. Expected an array of slot/answer objects, error: {}",
+            e
+        ))?;
+
+    if parsed.is_empty() {
+        anyhow::bail!("Answers JSON is empty");
+    }
+
+    let mut out = Vec::with_capacity(parsed.len());
+    for item in parsed {
+        if item.slot == 0 {
+            anyhow::bail!("Invalid slot 0 in answers JSON");
+        }
+        let answer = normalize_json_answer(item.answer)?;
+        out.push((item.slot, answer));
+    }
+
+    Ok(out)
+}
+
+fn normalize_json_answer(value: serde_json::Value) -> anyhow::Result<String> {
+    match value {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Number(n) => Ok(n.to_string()),
+        serde_json::Value::Bool(b) => Ok(b.to_string()),
+        serde_json::Value::Null => Ok(String::new()),
+        serde_json::Value::Array(arr) => {
+            let mut parts = Vec::with_capacity(arr.len());
+            for item in arr {
+                match item {
+                    serde_json::Value::String(s) => parts.push(s),
+                    serde_json::Value::Number(n) => parts.push(n.to_string()),
+                    serde_json::Value::Bool(b) => parts.push(b.to_string()),
+                    serde_json::Value::Null => parts.push(String::new()),
+                    _ => anyhow::bail!("Unsupported JSON answer array element type"),
+                }
+            }
+            Ok(parts.join(","))
+        }
+        serde_json::Value::Object(_) => anyhow::bail!("Unsupported JSON answer object type"),
+    }
+}
+
+fn parse_answers_relaxed_object_list(raw: &str) -> anyhow::Result<Vec<(u32, String)>> {
+    // Supports PowerShell-native argument flattening like:
+    // [{slot:1,answer:0},{slot:2,answer:"0,2"}]
+    let s = raw.trim();
+    if !s.starts_with('[') || !s.ends_with(']') {
+        anyhow::bail!("Not a list-like input");
+    }
+
+    let object_re = regex::Regex::new(r"\{([^{}]+)\}").unwrap();
+    let slot_re = regex::Regex::new(r"(?i)(?:^|,)\s*slot\s*:\s*([^,\s]+)").unwrap();
+    let answer_re = regex::Regex::new(r#"(?i)(?:^|,)\s*answer\s*:\s*(\"[^\"]*\"|[^,}]+)"#).unwrap();
+
+    let mut out = Vec::new();
+    for caps in object_re.captures_iter(s) {
+        let obj = caps.get(1).map(|m| m.as_str()).unwrap_or("");
+
+        let slot_text = slot_re
+            .captures(obj)
+            .and_then(|c| c.get(1).map(|m| m.as_str().trim().to_string()))
+            .ok_or_else(|| anyhow::anyhow!("Missing slot in '{}'", obj))?;
+        let slot: u32 = slot_text
+            .parse()
+            .map_err(|_| anyhow::anyhow!("Invalid slot '{}'", slot_text))?;
+        if slot == 0 {
+            anyhow::bail!("Invalid slot 0 in '{}'", obj);
+        }
+
+        let mut answer = answer_re
+            .captures(obj)
+            .and_then(|c| c.get(1).map(|m| m.as_str().trim().to_string()))
+            .ok_or_else(|| anyhow::anyhow!("Missing answer in '{}'", obj))?;
+
+        if answer.starts_with('"') && answer.ends_with('"') && answer.len() >= 2 {
+            answer = answer[1..answer.len() - 1].to_string();
+        }
+
+        out.push((slot, answer));
+    }
+
+    if out.is_empty() {
+        anyhow::bail!("No objects found in list-like answers input");
+    }
+
+    Ok(out)
+}
+
+fn parse_answers_delimited(raw: &str) -> anyhow::Result<Vec<(u32, String)>> {
+    let segments = split_unescaped(raw, ';')?;
+    let mut out = Vec::new();
+
+    for (idx, segment) in segments.into_iter().enumerate() {
+        let seg = segment.trim();
+        if seg.is_empty() {
+            continue;
+        }
+
+        let (slot_part, answer_part) = split_once_unescaped(seg, ':')?
+            .ok_or_else(|| anyhow::anyhow!(
+                "Invalid answer segment #{}: '{}' (expected slot:answer)",
+                idx + 1,
+                seg
+            ))?;
+
+        let slot: u32 = slot_part.trim().parse().map_err(|_| {
+            anyhow::anyhow!("Invalid slot in segment #{}: '{}'", idx + 1, slot_part)
+        })?;
+
+        if slot == 0 {
+            anyhow::bail!("Invalid slot 0 in segment #{}", idx + 1);
+        }
+
+        let answer = unescape_value(answer_part.trim())?;
+        out.push((slot, answer));
+    }
+
+    if out.is_empty() {
+        anyhow::bail!("No valid answers parsed. Format example: 1:0;2:my\\:text;3:a\\;b");
+    }
+
+    Ok(out)
+}
+
+fn split_unescaped(input: &str, delim: char) -> anyhow::Result<Vec<String>> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if escaped {
+            current.push(ch);
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+
+        if ch == delim {
+            parts.push(std::mem::take(&mut current));
+        } else {
+            current.push(ch);
+        }
+    }
+
+    if escaped {
+        anyhow::bail!("Trailing escape character in answers input");
+    }
+
+    parts.push(current);
+    Ok(parts)
+}
+
+fn split_once_unescaped(input: &str, delim: char) -> anyhow::Result<Option<(String, String)>> {
+    let mut escaped = false;
+    for (idx, ch) in input.char_indices() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
+        if ch == delim {
+            let left = input[..idx].to_string();
+            let right = input[idx + ch.len_utf8()..].to_string();
+            return Ok(Some((left, right)));
+        }
+    }
+
+    if escaped {
+        anyhow::bail!("Trailing escape character in segment '{}'", input);
+    }
+
+    Ok(None)
+}
+
+fn unescape_value(input: &str) -> anyhow::Result<String> {
+    let mut out = String::new();
+    let mut escaped = false;
+
+    for ch in input.chars() {
+        if escaped {
+            match ch {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                '\\' => out.push('\\'),
+                ';' => out.push(';'),
+                ':' => out.push(':'),
+                other => out.push(other),
+            }
+            escaped = false;
+            continue;
+        }
+
+        if ch == '\\' {
+            escaped = true;
+        } else {
+            out.push(ch);
+        }
+    }
+
+    if escaped {
+        anyhow::bail!("Trailing escape character in answer value");
+    }
+
+    Ok(out)
 }

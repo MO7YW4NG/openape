@@ -6,7 +6,7 @@ use crate::utils::format_moodle_date;
 use super::{ApiCtx, level_to_classification};
 
 pub async fn run(cmd: &crate::CoursesCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::CoursesCommands::List { incomplete_only, level } => {

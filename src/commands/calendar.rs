@@ -8,7 +8,7 @@ use std::fs;
 use super::ApiCtx;
 
 pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::CalendarCommands::Events { upcoming, days, course } => {

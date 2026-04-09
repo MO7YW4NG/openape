@@ -7,10 +7,10 @@ use crate::moodle::forum::{
 };
 use crate::output::format_and_output;
 use crate::utils::{strip_html_tags, format_moodle_date};
-use super::{ApiCtx, level_to_classification};
+use super::{ApiCtx, in_progress_all_to_classification};
 
 pub async fn run(cmd: &crate::ForumsCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::ForumsCommands::List => {
@@ -18,7 +18,7 @@ pub async fn run(cmd: &crate::ForumsCommands, cli: &Cli) -> Result<()> {
         }
 
         crate::ForumsCommands::ListAll { level } => {
-            let classification = level_to_classification(*level);
+            let classification = in_progress_all_to_classification(*level);
             list_forums(&ctx, classification).await?;
         }
 

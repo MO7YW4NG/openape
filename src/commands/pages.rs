@@ -3,10 +3,10 @@ use crate::Cli;
 use crate::moodle::course::get_enrolled_courses_api;
 use crate::moodle::page::get_pages_by_courses_api;
 use crate::output::format_and_output;
-use super::{ApiCtx, level_to_classification};
+use super::{ApiCtx, in_progress_all_to_classification, level_to_classification};
 
 pub async fn run(cmd: &crate::PagesCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::PagesCommands::List { course_id } => {
@@ -24,7 +24,7 @@ pub async fn run(cmd: &crate::PagesCommands, cli: &Cli) -> Result<()> {
         }
 
         crate::PagesCommands::ListAll { level } => {
-            let classification = level_to_classification(*level);
+            let classification = in_progress_all_to_classification(*level);
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
             let course_ids: Vec<u64> = courses.iter().map(|c| c.id).collect();
             let pages = get_pages_by_courses_api(&ctx.client, &ctx.session, &course_ids).await?;

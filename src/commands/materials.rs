@@ -6,14 +6,14 @@ use crate::moodle::video::update_completion_status;
 use crate::output::format_and_output;
 use crate::utils::{sanitize_filename, format_file_size};
 use std::path::Path;
-use super::{ApiCtx, level_to_classification};
+use super::{ApiCtx, in_progress_all_to_classification, level_to_classification};
 
 pub async fn run(cmd: &crate::MaterialsCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::MaterialsCommands::ListAll { level } => {
-            let classification = level_to_classification(*level);
+            let classification = in_progress_all_to_classification(*level);
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
             let course_ids: Vec<u64> = courses.iter().map(|c| c.id).collect();
             let resources = get_resources_by_courses_api(&ctx.client, &ctx.session, &course_ids).await?;

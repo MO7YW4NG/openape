@@ -6,7 +6,7 @@ use crate::output::format_and_output;
 use super::ApiCtx;
 
 pub async fn run(cmd: &crate::GradesCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::GradesCommands::Summary => {

@@ -57,6 +57,18 @@ pub async fn moodle_api_call(
     let resp = client.get(&url).send().await?;
     let result: Value = resp.json().await?;
 
+    if result.get("exception").is_some() || result.get("errorcode").is_some() {
+        let msg = result.get("message")
+            .and_then(|m| m.as_str())
+            .or_else(|| result.get("errorcode").and_then(|m| m.as_str()))
+            .or_else(|| result.get("exception").and_then(|m| m.as_str()))
+            .unwrap_or("Unknown error");
+        return Err(MoodleError::WsApi {
+            function: function.to_string(),
+            message: msg.to_string(),
+        });
+    }
+
     if result.get("error").and_then(|e| e.as_bool()).unwrap_or(false) {
         let msg = result.get("message")
             .or_else(|| result.get("exception").and_then(|e| e.get("message")))

@@ -22,9 +22,19 @@ pub enum OutputFormat {
 #[derive(Clone, Copy, Default, ValueEnum)]
 pub enum CourseLevel {
     #[default]
+    #[value(name = "in_progress")]
     InProgress,
     Past,
     Future,
+    All,
+}
+
+#[derive(Clone, Copy, Default, ValueEnum)]
+pub enum InProgressAllLevel {
+    #[default]
+    #[value(name = "in_progress")]
+    InProgress,
+    #[value(name = "all")]
     All,
 }
 
@@ -167,8 +177,8 @@ pub enum QuizzesCommands {
     },
     /// List all quizzes across all courses
     ListAll {
-        #[arg(long, value_enum, default_value_t = CourseLevel::default())]
-        level: CourseLevel,
+        #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]
+        level: InProgressAllLevel,
         #[arg(long)]
         all: bool,
     },
@@ -185,6 +195,7 @@ pub enum QuizzesCommands {
     /// Save answers for a quiz attempt
     Save {
         attempt_id: u64,
+        #[arg(value_name = "ANSWERS_JSON_OR_DELIMITED")]
         answers: String,
         #[arg(long)]
         submit: bool,
@@ -197,8 +208,8 @@ pub enum QuizzesCommands {
 pub enum MaterialsCommands {
     /// List all materials across all courses
     ListAll {
-        #[arg(long, value_enum, default_value_t = CourseLevel::default())]
-        level: CourseLevel,
+        #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]
+        level: InProgressAllLevel,
     },
     /// Download all materials from a specific course
     Download {
@@ -248,8 +259,8 @@ pub enum ForumsCommands {
     List,
     /// List all forums across all courses
     ListAll {
-        #[arg(long, value_enum, default_value_t = CourseLevel::default())]
-        level: CourseLevel,
+        #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]
+        level: InProgressAllLevel,
     },
     /// List discussions in a forum
     Discussions {
@@ -291,8 +302,6 @@ pub enum ForumsCommands {
 pub enum AnnouncementsCommands {
     /// List all announcements across all courses
     ListAll {
-        #[arg(long, value_enum, default_value_t = CourseLevel::default())]
-        level: CourseLevel,
         #[arg(long)]
         unread_only: bool,
         #[arg(long, default_value = "20")]
@@ -336,8 +345,8 @@ pub enum AssignmentsCommands {
     },
     /// List all assignments across all courses
     ListAll {
-        #[arg(long, value_enum, default_value_t = CourseLevel::default())]
-        level: CourseLevel,
+        #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]
+        level: InProgressAllLevel,
     },
     /// Check assignment submission status
     Status {
@@ -377,8 +386,8 @@ pub enum PagesCommands {
     },
     /// List all pages across all courses
     ListAll {
-        #[arg(long, value_enum, default_value_t = CourseLevel::default())]
-        level: CourseLevel,
+        #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]
+        level: InProgressAllLevel,
     },
     /// Show the content of a specific page
     Show {

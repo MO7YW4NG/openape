@@ -9,7 +9,7 @@ use super::ApiCtx;
 use crate::moodle::types::SuperVideoModule;
 
 pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::VideosCommands::List { course_id, incomplete_only } => {

@@ -28,3 +28,18 @@ pub fn load_config(base_dir: Option<&Path>) -> AppConfig {
             .unwrap_or_else(|_| ".auth/storage-state.json".to_string()),
     }
 }
+
+/// Load config and apply CLI-level overrides.
+pub fn load_config_for_cli(cli: &crate::Cli) -> AppConfig {
+    let mut config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
+
+    // Keep parity with legacy CLI behavior where `--headed` forces non-headless mode.
+    if cli.headed {
+        config.headless = false;
+    }
+
+    // Always honor effective CLI session path (default or explicit override).
+    config.auth_state_path = cli.session.to_string_lossy().to_string();
+
+    config
+}

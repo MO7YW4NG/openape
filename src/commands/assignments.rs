@@ -5,10 +5,10 @@ use crate::moodle::assignment::{get_assignments_by_courses_api, get_submission_s
 use crate::moodle::upload::upload_file_api;
 use crate::output::format_and_output;
 use crate::utils::format_moodle_date;
-use super::{ApiCtx, level_to_classification};
+use super::{ApiCtx, in_progress_all_to_classification};
 
 pub async fn run(cmd: &crate::AssignmentsCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
         crate::AssignmentsCommands::List { course_id } => {
@@ -29,7 +29,7 @@ pub async fn run(cmd: &crate::AssignmentsCommands, cli: &Cli) -> Result<()> {
         }
 
         crate::AssignmentsCommands::ListAll { level } => {
-            let classification = level_to_classification(*level);
+            let classification = in_progress_all_to_classification(*level);
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
             let course_ids: Vec<u64> = courses.iter().map(|c| c.id).collect();
             let assignments = get_assignments_by_courses_api(&ctx.client, &ctx.session, &course_ids).await?;

@@ -8,10 +8,10 @@ use crate::utils::format_moodle_date;
 use super::ApiCtx;
 
 pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
-    let ctx = ApiCtx::build(cli.config.as_ref(), cli.output, cli.verbose, cli.silent)?;
+    let ctx = ApiCtx::build(cli)?;
 
     match cmd {
-        crate::AnnouncementsCommands::ListAll { level, unread_only, limit } => {
+        crate::AnnouncementsCommands::ListAll { unread_only, limit } => {
             let site_info = get_site_info(&ctx.client, &ctx.session).await?;
             let messages = get_messages_api(
                 &ctx.client, &ctx.session,
@@ -33,9 +33,6 @@ pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
                     "unread": unread,
                 })
             }).collect();
-
-            // TODO: course-level filtering when messages include course context
-            let _level = level;
 
             // Sort by created_at descending (already strings, lexicographic sort works for ISO dates)
             items.sort_by(|a, b| {

@@ -4,7 +4,7 @@ use super::types::{QuizAttempt, QuizAttemptData, QuizModule, QuizQuestion, QuizS
 use crate::utils::{parse_question_html, parse_saved_answer};
 use reqwest::Client;
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Get quizzes by course IDs via WS API.
 pub async fn get_quizzes_by_courses_api(
@@ -99,30 +99,86 @@ pub async fn start_quiz_attempt_api(
         "quizid" => quiz_id,
         "forcenew" => if force_new { 1 } else { 0 }
     );
-    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "mod_quiz_start_attempt", &args).await?;
+    let data = match moodle_api_call(client, &session.moodle_base_url, ws_token,
+        "mod_quiz_start_attempt", &args).await {
+        Ok(d) => d,
+        Err(start_err) => {
+            if let Some(existing) = get_latest_inprogress_attempt(client, session, quiz_id).await? {
+                return Ok(QuizStartResult {
+                    attempt: existing,
+                    messages: Some(vec![
+                        "Found existing in-progress attempt; reused it instead of creating a new one.".to_string(),
+                    ]),
+                });
+            }
+            return Err(start_err.into());
+        }
+    };
 
-    let attempt = data.get("attempt").ok_or_else(|| anyhow::anyhow!("No attempt data"))?;
-    let attempt_id = attempt.get("id").or_else(|| attempt.get("attempt"))
-        .and_then(|v| v.as_u64()).unwrap_or(0);
+    let attempt = if let Some(a) = data.get("attempt") {
+        a
+    } else if let Some(existing) = get_latest_inprogress_attempt(client, session, quiz_id).await? {
+        return Ok(QuizStartResult {
+            attempt: existing,
+            messages: Some(vec![
+                "Start response did not include attempt payload; reused existing in-progress attempt.".to_string(),
+            ]),
+        });
+    } else {
+        anyhow::bail!("No attempt data in start response");
+    };
+
+    let parsed_attempt = parse_attempt(attempt);
 
     Ok(QuizStartResult {
-        attempt: QuizAttempt {
-            attempt: attempt_id,
-            attemptid: attempt_id,
-            quizid: attempt.get("quizid").or_else(|| attempt.get("quiz"))
-                .and_then(|v| v.as_u64()).unwrap_or(0),
-            userid: attempt.get("userid").and_then(|v| v.as_u64()).unwrap_or(0),
-            attemptnumber: attempt.get("attemptnumber").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
-            state: attempt.get("state").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            timestart: attempt.get("timestart").and_then(|v| v.as_i64()).unwrap_or(0),
-            timefinish: attempt.get("timefinish").and_then(|v| v.as_i64()),
-            uniqueid: attempt.get("uniqueid").and_then(|v| v.as_u64()),
-            preview: attempt.get("preview").and_then(|v| v.as_i64()) == Some(1),
-        },
+        attempt: parsed_attempt,
         messages: data.get("messages").and_then(|m| m.as_array())
             .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect()),
     })
+}
+
+async fn get_latest_inprogress_attempt(
+    client: &Client,
+    session: &SessionInfo,
+    quiz_id: u64,
+) -> anyhow::Result<Option<QuizAttempt>> {
+    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let args = moodle_args!(
+        "quizid" => quiz_id,
+        "status" => "all",
+    );
+    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
+        "mod_quiz_get_user_attempts", &args).await?;
+
+    let attempts = data.get("attempts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let latest = attempts.into_iter()
+        .filter(|a| a.get("state").and_then(|v| v.as_str()) == Some("inprogress"))
+        .max_by_key(|a| a.get("attempt").and_then(|v| v.as_u64()).unwrap_or(0));
+
+    Ok(latest.as_ref().map(parse_attempt))
+}
+
+fn parse_attempt(attempt: &Value) -> QuizAttempt {
+    let attempt_id = attempt.get("id").or_else(|| attempt.get("attempt"))
+        .and_then(|v| v.as_u64()).unwrap_or(0);
+
+    QuizAttempt {
+        attempt: attempt_id,
+        attemptid: attempt_id,
+        quizid: attempt.get("quizid").or_else(|| attempt.get("quiz"))
+            .and_then(|v| v.as_u64()).unwrap_or(0),
+        userid: attempt.get("userid").and_then(|v| v.as_u64()).unwrap_or(0),
+        attemptnumber: attempt.get("attemptnumber")
+            .or_else(|| attempt.get("attempt"))
+            .and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+        state: attempt.get("state").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+        timestart: attempt.get("timestart").and_then(|v| v.as_i64()).unwrap_or(0),
+        timefinish: attempt.get("timefinish")
+            .and_then(|v| v.as_i64())
+            .and_then(|v| if v > 0 { Some(v) } else { None }),
+        uniqueid: attempt.get("uniqueid").and_then(|v| v.as_u64()),
+        preview: attempt.get("preview").and_then(|v| v.as_i64()) == Some(1),
+    }
 }
 
 /// Get quiz attempt data for a specific page.
@@ -233,6 +289,7 @@ pub async fn process_quiz_attempt_api(
     unique_id: u64,
     answers: &[(u32, String)], // (slot, answer)
     sequence_checks: &HashMap<u32, u64>,
+    checkbox_slots: &HashSet<u32>,
     finish: bool,
 ) -> anyhow::Result<String> {
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
@@ -240,6 +297,8 @@ pub async fn process_quiz_attempt_api(
     let mut args = HashMap::new();
     args.insert("attemptid".to_string(), serde_json::json!(attempt_id));
     args.insert("finishattempt".to_string(), serde_json::json!(if finish { 1 } else { 0 }));
+
+    let numeric_csv_re = regex::Regex::new(r"^\d+(,\d+)*$").unwrap();
 
     let mut i = 0usize;
     for &(slot, ref answer) in answers {
@@ -251,8 +310,7 @@ pub async fn process_quiz_attempt_api(
         }
 
         // Detect answer format
-        let re = regex::Regex::new(r"^\d+(,\d+)*$").unwrap();
-        if re.is_match(answer) && answer.contains(',') {
+        if checkbox_slots.contains(&slot) && numeric_csv_re.is_match(answer) && answer.contains(',') {
             // Multichoices
             for choice in answer.split(',') {
                 args.insert(format!("data[{}][name]", i), serde_json::json!(format!("q{}:{}_choice{}", unique_id, slot, choice)));
