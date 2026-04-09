@@ -7,45 +7,29 @@ use crate::output::format_and_output;
 use std::path::Path;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
-const CRATES_IO_API: &str = "https://crates.io/api/v1/crates/openape";
-const UPDATE_CHECK_ENV: &str = "OPENAPE_CHECK_UPDATES";
-
-fn update_check_enabled() -> bool {
-    std::env::var(UPDATE_CHECK_ENV)
-        .map(|v| {
-            matches!(
-                v.trim().to_ascii_lowercase().as_str(),
-                "1" | "true" | "yes" | "on"
-            )
-        })
-        .unwrap_or(false)
-}
+const NPM_PACKAGE_NAME: &str = "@mo7yw4ng/openape";
+const NPM_REGISTRY_API: &str = "https://registry.npmjs.org/@mo7yw4ng%2fopenape";
 
 async fn check_for_update(log: &Logger) {
-    // This project may be private/unpublished; only check crates.io when explicitly enabled.
-    if !update_check_enabled() {
-        return;
-    }
-
     let client = reqwest::Client::builder()
         .user_agent(format!("openape/{}", CURRENT_VERSION))
         .timeout(std::time::Duration::from_secs(5))
         .build();
     let Ok(client) = client else { return };
 
-    let Ok(resp) = client.get(CRATES_IO_API).send().await else { return };
+    let Ok(resp) = client.get(NPM_REGISTRY_API).send().await else { return };
     let Ok(json) = resp.json::<serde_json::Value>().await else { return };
 
-    if json.get("errors").is_some() {
-        log.debug("Update check skipped: crate not found on crates.io.");
+    if json.get("error").is_some() {
+        log.debug("Update check skipped: package not found on npm registry.");
         return;
     }
 
-    if let Some(latest) = json["crate"]["newest_version"].as_str() {
+    if let Some(latest) = json["dist-tags"]["latest"].as_str() {
         if latest != CURRENT_VERSION {
             log.warn(&format!(
-                "Update available on crates.io: v{} -> v{}  (run: cargo install openape)",
-                CURRENT_VERSION, latest
+                "Update available on npm: v{} -> v{}  (run: npm install -g {}@latest)",
+                CURRENT_VERSION, latest, NPM_PACKAGE_NAME
             ));
         }
     }
