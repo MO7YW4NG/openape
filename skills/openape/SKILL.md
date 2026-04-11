@@ -49,6 +49,12 @@ openape <command> [subcommand] [args] [flags]
   - `submit <attempt-id>` — Submit a quiz attempt using currently saved answers
 
 > **NEVER SUBMIT WITHOUT USER'S PERMISSION**, you have to make sure answer is saved before submitting.
+>
+> **Suggested flow:**
+> 1. `start <quiz-id>` — Read all questions and present them to the user
+> 2. `save <attempt-id> '<answers>'` — Save answers
+> 3. `info <attempt-id>` — Verify answers are saved (`savedAnswer` field, `status: 答案已儲存`)
+> 4. Ask the user for permission, then `submit <attempt-id>`
 
 ### materials — Material/resource operations
 
