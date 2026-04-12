@@ -124,7 +124,7 @@ npx skills add mo7yw4ng/openape
 ```bash
 git clone https://github.com/mo7yw4ng/openape && cd openape
 
-# 建置 (需安裝 Playwright 瀏覽器支援: Edge/Chrome/Brave)
+# 建置
 cargo build
 
 # 執行
