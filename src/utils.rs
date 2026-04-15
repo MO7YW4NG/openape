@@ -92,13 +92,13 @@ pub fn strip_html_keep_lines(html: &str) -> String {
 
 /// Parse quiz question HTML into structured text and options.
 pub fn parse_question_html(html: &str) -> (String, Vec<String>) {
-    let qtext_re = Regex::new(r#"<div class="qtext">(.*?)</div>\s*</div>"#).unwrap();
+    let qtext_re = Regex::new(r#"(?s)<div class="qtext">(.*?)</div>\s*</div>"#).unwrap();
     let text = match qtext_re.captures(html) {
         Some(caps) => strip_html_keep_lines(&caps[1]),
         None => String::new(),
     };
 
-    let option_re = Regex::new(r#"data-region="answer-label">(.*?)</div>\s*</div>"#).unwrap();
+    let option_re = Regex::new(r#"(?s)data-region="answer-label">(.*?)</div>\s*</div>"#).unwrap();
     let options: Vec<String> = option_re.captures_iter(html)
         .filter_map(|caps| {
             let stripped = strip_html_keep_lines(&caps[1]);
