@@ -100,6 +100,10 @@ openape <command> [subcommand] [args] [flags]
 
   - `file <file-path>` — Upload a file to Moodle draft area
 
+> **Suggested flow:**
+>
+> If an assignment (`assignments submit`) or forum post (`forums post`/`forums reply`) requires a file attachment, first upload the file to the draft area using `upload file <file-path>` to obtain an attachment/file ID. Then pass the ID via `--file-id` (assignments) or `--attachment-id`/`--inline-attachment-id` (forums) when executing the command.
+
 ### pages — Page operations
 
   - `list <course-id>` — List pages in a course (content preview, first 150 chars)

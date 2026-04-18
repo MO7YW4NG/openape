@@ -237,7 +237,6 @@ pub async fn get_cookies(page: &Page) -> anyhow::Result<Vec<Cookie>> {
 /// Set cookies on a page.
 pub async fn set_cookies(page: &Page, cookies: &[Cookie]) -> anyhow::Result<()> {
     use chromiumoxide::cdp::browser_protocol::network::CookieParam;
-    
     let params: Vec<CookieParam> = cookies.iter().map(|c| {
         CookieParam::builder()
             .name(&c.name)
@@ -249,10 +248,8 @@ pub async fn set_cookies(page: &Page, cookies: &[Cookie]) -> anyhow::Result<()> 
             .build()
             .unwrap()
     }).collect();
-    
     page.set_cookies(params)
         .await
         .map_err(|e| anyhow::anyhow!("Failed to set cookies: {}", e))?;
-    
     Ok(())
 }

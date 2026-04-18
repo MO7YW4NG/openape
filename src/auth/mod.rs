@@ -71,6 +71,8 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
             let _ = launched.page.goto(&config.moodle_base_url).await;
             let _ = launched.page.wait_for_navigation().await;
             let _ = set_cookies(&launched.page, &cookies).await;
+            // Give the browser time to flush cookies to the store before reloading
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             let _ = launched.page.reload().await;
             let _ = launched.page.wait_for_navigation().await;
         }
@@ -340,7 +342,13 @@ pub async fn launch_persistent_session(config: &AppConfig, log: &Logger) -> anyh
         if let Ok(cookies) = load_cookies(&config.auth_state_path) {
             let _ = launched.page.goto(&config.moodle_base_url).await;
             let _ = launched.page.wait_for_navigation().await;
-            let _ = set_cookies(&launched.page, &cookies).await;
+            if let Err(e) = set_cookies(&launched.page, &cookies).await {
+                log.warn(&format!("{} mode: failed to set cookies: {}", mode_label, e));
+                close_browser(launched).await;
+                continue;
+            }
+            // Give the browser time to flush cookies to the store before reloading
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             let _ = launched.page.reload().await;
             let _ = launched.page.wait_for_navigation().await;
         }

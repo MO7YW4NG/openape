@@ -1,6 +1,7 @@
 use super::client::moodle_api_call;
 use super::types::{CalendarEvent, SessionInfo};
 use reqwest::Client;
+use serde_json::Value;
 use std::collections::HashMap;
 
 /// Get calendar events via WS API.
@@ -13,9 +14,21 @@ pub async fn get_calendar_events_api(
 ) -> anyhow::Result<Vec<CalendarEvent>> {
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
     let mut args = HashMap::new();
-    if let Some(cid) = course_id { args.insert("courseid".to_string(), serde_json::json!(cid)); }
-    if let Some(st) = start_time { args.insert("timesort".to_string(), serde_json::json!(st)); }
-    // Moodle uses 'timesort' for minimum start time filter
+
+    // Moodle core_calendar_get_calendar_events expects nested structure:
+    // events[courseids][0]=X, options[timestart]=Y, options[timeend]=Z
+    let mut events_obj = serde_json::Map::new();
+    if let Some(cid) = course_id {
+        events_obj.insert("courseids".to_string(), serde_json::json!([cid]));
+    }
+    let mut options_obj = serde_json::Map::new();
+    if let Some(st) = start_time { options_obj.insert("timestart".to_string(), serde_json::json!(st)); }
+    if let Some(et) = end_time { options_obj.insert("timeend".to_string(), serde_json::json!(et)); }
+
+    args.insert("events".to_string(), Value::Object(events_obj));
+    if !options_obj.is_empty() {
+        args.insert("options".to_string(), Value::Object(options_obj));
+    }
 
     let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
         "core_calendar_get_calendar_events", &args).await?;

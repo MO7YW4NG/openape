@@ -5,6 +5,8 @@ use std::collections::HashMap;
 
 /// Build URL search params with Moodle's array encoding:
 /// `courseids[0]=1&courseids[1]=2` and `options[0][name]=x&options[0][value]=y`.
+/// Also handles nested objects for Moodle single_structure params:
+/// `events[courseids][0]=1&events[courseids][1]=2` and `options[timestart]=123`.
 pub fn build_ws_params(args: &HashMap<String, Value>) -> String {
     let mut parts = Vec::new();
 
@@ -25,6 +27,26 @@ pub fn build_ws_params(args: &HashMap<String, Value>) -> String {
                         other => other.to_string(),
                     };
                     parts.push(format!("{}[{}]={}", key, i, s));
+                }
+            }
+            Value::Object(obj) => {
+                // Nested object (e.g., events[courseids][0]=1, options[timestart]=123)
+                for (sub_key, sub_val) in obj {
+                    match sub_val {
+                        Value::Array(arr) => {
+                            for (i, v) in arr.iter().enumerate() {
+                                let s = match v {
+                                    Value::String(s) => s.clone(),
+                                    other => other.to_string(),
+                                };
+                                parts.push(format!("{}[{}][{}]={}", key, sub_key, i, s));
+                            }
+                        }
+                        Value::Null => {}
+                        other => {
+                            parts.push(format!("{}[{}]={}", key, sub_key, other));
+                        }
+                    }
                 }
             }
             Value::Null => {}
