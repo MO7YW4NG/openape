@@ -62,23 +62,15 @@ pub fn build_ws_params(args: &HashMap<String, Value>) -> String {
     parts.join("&")
 }
 
-/// Direct HTTP API call via Moodle Web Service REST endpoint (no browser).
-pub async fn moodle_api_call(
-    client: &Client,
-    base_url: &str,
-    ws_token: &str,
-    function: &str,
-    args: &HashMap<String, Value>,
-) -> Result<Value, MoodleError> {
+fn build_ws_url(base_url: &str, ws_token: &str, function: &str, args: &HashMap<String, Value>) -> String {
     let params = build_ws_params(args);
-    let url = format!(
+    format!(
         "{}/webservice/rest/server.php?wstoken={}&wsfunction={}&moodlewsrestformat=json&{}",
         base_url, ws_token, function, params
-    );
+    )
+}
 
-    let resp = client.get(&url).send().await?;
-    let result: Value = resp.json().await?;
-
+async fn check_ws_response(result: Value, function: &str) -> Result<Value, MoodleError> {
     if result.get("exception").is_some() || result.get("errorcode").is_some() {
         let msg = result.get("message")
             .and_then(|m| m.as_str())
@@ -90,7 +82,6 @@ pub async fn moodle_api_call(
             message: msg.to_string(),
         });
     }
-
     if result.get("error").and_then(|e| e.as_bool()).unwrap_or(false) {
         let msg = result.get("message")
             .or_else(|| result.get("exception").and_then(|e| e.get("message")))
@@ -101,8 +92,40 @@ pub async fn moodle_api_call(
             message: msg.to_string(),
         });
     }
-
     Ok(result)
+}
+
+/// Direct HTTP API call via Moodle Web Service REST endpoint (no browser).
+pub async fn moodle_api_call(
+    client: &Client,
+    base_url: &str,
+    ws_token: &str,
+    function: &str,
+    args: &HashMap<String, Value>,
+) -> Result<Value, MoodleError> {
+    let url = build_ws_url(base_url, ws_token, function, args);
+    let result: Value = client.get(&url).send().await?.json().await?;
+    check_ws_response(result, function).await
+}
+
+/// Like `moodle_api_call` but injects the SEB ConfigKeyHash header.
+/// Hash is computed as SHA256(requestURL + config_key), matching SEB browser behavior.
+pub async fn moodle_api_call_seb(
+    client: &Client,
+    base_url: &str,
+    ws_token: &str,
+    function: &str,
+    args: &HashMap<String, Value>,
+    seb_config_key: &str,
+) -> Result<Value, MoodleError> {
+    use crate::moodle::seb::compute_config_key_hash;
+    let url = build_ws_url(base_url, ws_token, function, args);
+    let hash = compute_config_key_hash(&url, seb_config_key);
+    let result: Value = client.get(&url)
+        .header("X-SafeExamBrowser-ConfigKeyHash", hash)
+        .send().await?
+        .json().await?;
+    check_ws_response(result, function).await
 }
 
 /// Helper to build args HashMap quickly.

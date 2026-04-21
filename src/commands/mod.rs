@@ -30,8 +30,21 @@ impl ApiCtx {
         let config = load_config_for_cli(cli);
         let log = Logger::new(cli.verbose, cli.silent);
         let session = crate::auth::create_api_context(&config, &log)?;
-        let client = reqwest::Client::builder()
-            .cookie_store(true)
+        let mut builder = reqwest::Client::builder();
+        if let Some(ref ua) = session.user_agent {
+            let full_ua = format!("{ua} SEB/3.8");
+            log.debug(&format!("Using User-Agent: {}", full_ua));
+            builder = builder.user_agent(full_ua);
+        }
+        if let Some(cookie_header) = crate::auth::load_cookie_header(&config.auth_state_path, &config.moodle_base_url) {
+            log.debug("Injecting saved session cookies into HTTP client.");
+            let mut headers = reqwest::header::HeaderMap::new();
+            if let Ok(val) = reqwest::header::HeaderValue::from_str(&cookie_header) {
+                headers.insert(reqwest::header::COOKIE, val);
+                builder = builder.default_headers(headers);
+            }
+        }
+        let client = builder
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?;
         Ok(ApiCtx { client, session, log, output: cli.output })

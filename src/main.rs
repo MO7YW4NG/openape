@@ -155,8 +155,18 @@ pub enum VideosCommands {
         #[arg(long)]
         dry_run: bool,
     },
-    /// Download videos from a course
+    /// Download a specific video by cmid
     Download {
+        /// The cmid of the video to download
+        cmid: u64,
+        /// Course id (optional; if omitted, scans all enrolled courses)
+        #[arg(long)]
+        course_id: Option<u64>,
+        #[arg(long, default_value = "./downloads/videos")]
+        output_dir: PathBuf,
+    },
+    /// Download all videos from a course
+    DownloadAll {
         course_id: u64,
         #[arg(long, default_value = "./downloads/videos")]
         output_dir: PathBuf,
@@ -185,22 +195,34 @@ pub enum QuizzesCommands {
     /// Start a new quiz attempt
     Start {
         quiz_id: u64,
+        /// Course module ID (cmid) for SEB-protected quizzes
+        #[arg(long)]
+        cmid: Option<u64>,
     },
     /// Get quiz attempt data and questions
     Info {
         attempt_id: u64,
         #[arg(long, default_value = "-1")]
         page: i32,
+        /// Course module ID (cmid) for SEB-protected quizzes
+        #[arg(long)]
+        cmid: Option<u64>,
     },
     /// Save answers for a quiz attempt
     Save {
         attempt_id: u64,
         #[arg(value_name = "ANSWERS_JSON_OR_DELIMITED")]
         answers: String,
+        /// Course module ID (cmid) for SEB-protected quizzes
+        #[arg(long)]
+        cmid: Option<u64>,
     },
     /// Submit a quiz attempt using currently saved answers
     Submit {
         attempt_id: u64,
+        /// Course module ID (cmid) for SEB-protected quizzes
+        #[arg(long)]
+        cmid: Option<u64>,
     },
 }
 

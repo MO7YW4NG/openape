@@ -82,6 +82,14 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
     let session_valid = check_session_valid(&launched.page, &config.moodle_base_url).await;
 
     if session_valid {
+        // Capture and save browser user-agent
+        if meta.user_agent.is_none() {
+            if let Some(ua) = get_browser_user_agent(&launched.page).await {
+                meta.set_user_agent(&ua);
+                let _ = meta.save(&config.auth_state_path);
+            }
+        }
+
         // Try to acquire WS token if we don't have one
         if ws_token.is_none() {
             match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
@@ -119,7 +127,12 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
             None => anyhow::bail!("Failed to relaunch browser in headed mode."),
         };
         perform_login(&launched.page, &config.moodle_base_url, log).await?;
-        
+
+        // Capture and save browser user-agent
+        if let Some(ua) = get_browser_user_agent(&launched.page).await {
+            meta.set_user_agent(&ua);
+        }
+
         // Acquire WS token
         if ws_token.is_none() {
             match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
@@ -144,7 +157,12 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
 
     // Already headed, just login
     perform_login(&launched.page, &config.moodle_base_url, log).await?;
-    
+
+    // Capture and save browser user-agent
+    if let Some(ua) = get_browser_user_agent(&launched.page).await {
+        meta.set_user_agent(&ua);
+    }
+
     // Acquire WS token
     if ws_token.is_none() {
         match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
@@ -178,6 +196,7 @@ pub fn create_api_context(config: &AppConfig, log: &Logger) -> anyhow::Result<Se
     Ok(SessionInfo {
         moodle_base_url: config.moodle_base_url.clone(),
         ws_token: Some(ws_token),
+        user_agent: meta.user_agent.clone(),
     })
 }
 
@@ -231,6 +250,14 @@ async fn perform_login(page: &Page, base_url: &str, log: &Logger) -> anyhow::Res
 
     log.success("Login completed successfully.");
     Ok(())
+}
+
+/// Get the browser's User-Agent via CDP.
+async fn get_browser_user_agent(page: &Page) -> Option<String> {
+    match page.evaluate("navigator.userAgent").await {
+        Ok(val) => val.value().and_then(|v| v.as_str().map(String::from)),
+        Err(_) => None,
+    }
 }
 
 /// Acquire Moodle Web Service Token via mobile app launch endpoint.
@@ -310,7 +337,7 @@ pub fn logout(config: &AppConfig) {
 }
 
 /// Launch a browser session using saved cookies (clean profile).
-pub async fn launch_persistent_session(config: &AppConfig, log: &Logger) -> anyhow::Result<LaunchedBrowser> {
+pub async fn launch_persistent_session(config: &AppConfig, log: &Logger, headless_only: bool) -> anyhow::Result<LaunchedBrowser> {
     let cookies_path = get_cookies_path(&config.auth_state_path);
 
     if !cookies_path.exists() {
@@ -322,8 +349,13 @@ pub async fn launch_persistent_session(config: &AppConfig, log: &Logger) -> anyh
         anyhow::bail!("No browser found (Edge/Chrome/Brave). Please install one.");
     }
 
-    // Try headless first, fall back to headed if session validation fails
-    for &use_headless in &[true, false] {
+    let headless_modes = if headless_only {
+        vec![true]
+    } else {
+        vec![true, false]
+    };
+
+    for &use_headless in &headless_modes {
         let mode_label = if use_headless { "headless" } else { "headed" };
 
         let mut launched_opt: Option<LaunchedBrowser> = None;
@@ -411,4 +443,12 @@ fn load_cookies(auth_state_path: &str) -> anyhow::Result<Vec<Cookie>> {
     let content = std::fs::read_to_string(&path)?;
     let cookies: Vec<Cookie> = serde_json::from_str(&content)?;
     Ok(cookies)
+}
+
+/// Load saved session cookies as a `Cookie: ...` header value for the given URL.
+pub fn load_cookie_header(auth_state_path: &str, target_url: &str) -> Option<String> {
+    let cookies = load_cookies(auth_state_path).ok()?;
+    if cookies.is_empty() { return None; }
+    let header = cookies_to_cookie_header(&cookies, target_url);
+    if header.is_empty() { None } else { Some(header) }
 }

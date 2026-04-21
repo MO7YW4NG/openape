@@ -11,3 +11,4 @@ pub mod quiz;
 pub mod types;
 pub mod upload;
 pub mod video;
+pub mod seb;

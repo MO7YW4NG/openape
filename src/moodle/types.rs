@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 pub struct SessionInfo {
     pub moodle_base_url: String,
     pub ws_token: Option<String>,
+    pub user_agent: Option<String>,
 }
 
 // ── Course ────────────────────────────────────────────────────────────────
@@ -49,6 +50,9 @@ pub struct QuizModule {
     pub is_complete: bool,
     pub attempts_used: u32,
     pub max_attempts: u32,
+    pub intro: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cmid: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub time_open: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]

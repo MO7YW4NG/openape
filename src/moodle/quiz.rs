@@ -1,7 +1,8 @@
-use super::client::moodle_api_call;
+use super::client::{moodle_api_call, moodle_api_call_seb};
+use super::seb::fetch_seb_config_key;
 use crate::moodle_args;
 use super::types::{QuizAttempt, QuizAttemptData, QuizModule, QuizQuestion, QuizStartResult, SessionInfo};
-use crate::utils::{parse_question_html, parse_saved_answer};
+use crate::utils::{parse_question_html, parse_saved_answer, strip_html_tags};
 use reqwest::Client;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -40,6 +41,8 @@ pub async fn get_quizzes_by_courses_api(
             is_complete: info.map(|i| i.0).unwrap_or(false),
             attempts_used: info.map(|i| i.1).unwrap_or(0),
             max_attempts: q.get("attempts").and_then(|v| v.as_u64()).unwrap_or(0) as u32,
+            intro: q.get("intro").and_then(|v| v.as_str()).map(strip_html_tags).unwrap_or_default(),
+            cmid: q.get("coursemodule").and_then(|v| v.as_u64()),
             time_open: q.get("timeopen").and_then(|v| v.as_i64()),
             time_close: q.get("timeclose").and_then(|v| v.as_i64()),
             course_id: q.get("course").and_then(|v| v.as_u64()),
@@ -87,23 +90,52 @@ async fn get_user_quiz_attempt_info(
     Ok(info)
 }
 
+/// Fetch SEB config key for the given cmid, or None if no cmid provided.
+async fn resolve_seb_hash(
+    client: &Client,
+    session: &SessionInfo,
+    seb_cmid: Option<u64>,
+) -> anyhow::Result<Option<String>> {
+    let Some(cmid) = seb_cmid else { return Ok(None) };
+    let config_key = fetch_seb_config_key(client, &session.moodle_base_url, cmid).await?;
+    Ok(Some(config_key))
+}
+
+/// Call WS API, injecting SEB ConfigKeyHash header if provided.
+async fn quiz_api_call(
+    client: &Client,
+    base_url: &str,
+    ws_token: &str,
+    function: &str,
+    args: &HashMap<String, Value>,
+    seb_hash: Option<&str>,
+) -> Result<Value, crate::error::MoodleError> {
+    if let Some(hash) = seb_hash {
+        moodle_api_call_seb(client, base_url, ws_token, function, args, hash).await
+    } else {
+        moodle_api_call(client, base_url, ws_token, function, args).await
+    }
+}
+
 /// Start a new quiz attempt.
 pub async fn start_quiz_attempt_api(
     client: &Client,
     session: &SessionInfo,
     quiz_id: u64,
     force_new: bool,
+    seb_cmid: Option<u64>,
 ) -> anyhow::Result<QuizStartResult> {
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let seb_key = resolve_seb_hash(client, session, seb_cmid).await?;
     let args = moodle_args!(
         "quizid" => quiz_id,
         "forcenew" => if force_new { 1 } else { 0 }
     );
-    let data = match moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "mod_quiz_start_attempt", &args).await {
+    let data = match quiz_api_call(client, &session.moodle_base_url, ws_token,
+        "mod_quiz_start_attempt", &args, seb_key.as_deref()).await {
         Ok(d) => d,
         Err(start_err) => {
-            if let Some(existing) = get_latest_inprogress_attempt(client, session, quiz_id).await? {
+            if let Some(existing) = get_latest_inprogress_attempt(client, session, quiz_id, seb_key.as_deref()).await? {
                 return Ok(QuizStartResult {
                     attempt: existing,
                     messages: Some(vec![
@@ -117,7 +149,7 @@ pub async fn start_quiz_attempt_api(
 
     let attempt = if let Some(a) = data.get("attempt") {
         a
-    } else if let Some(existing) = get_latest_inprogress_attempt(client, session, quiz_id).await? {
+    } else if let Some(existing) = get_latest_inprogress_attempt(client, session, quiz_id, seb_key.as_deref()).await? {
         return Ok(QuizStartResult {
             attempt: existing,
             messages: Some(vec![
@@ -141,14 +173,15 @@ async fn get_latest_inprogress_attempt(
     client: &Client,
     session: &SessionInfo,
     quiz_id: u64,
+    seb_key: Option<&str>,
 ) -> anyhow::Result<Option<QuizAttempt>> {
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
     let args = moodle_args!(
         "quizid" => quiz_id,
         "status" => "all",
     );
-    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "mod_quiz_get_user_attempts", &args).await?;
+    let data = quiz_api_call(client, &session.moodle_base_url, ws_token,
+        "mod_quiz_get_user_attempts", &args, seb_key).await?;
 
     let attempts = data.get("attempts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
     let latest = attempts.into_iter()
@@ -187,11 +220,13 @@ pub async fn get_quiz_attempt_data_api(
     session: &SessionInfo,
     attempt_id: u64,
     page: i32,
+    seb_cmid: Option<u64>,
 ) -> anyhow::Result<QuizAttemptData> {
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let seb_key = resolve_seb_hash(client, session, seb_cmid).await?;
     let args = moodle_args!("attemptid" => attempt_id, "page" => page);
-    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "mod_quiz_get_attempt_data", &args).await?;
+    let data = quiz_api_call(client, &session.moodle_base_url, ws_token,
+        "mod_quiz_get_attempt_data", &args, seb_key.as_deref()).await?;
 
     let attempt = data.get("attempt").ok_or_else(|| anyhow::anyhow!("Invalid attempt data"))?;
     let a_id = attempt.get("id").or_else(|| attempt.get("attempt"))
@@ -261,15 +296,16 @@ pub async fn get_all_quiz_attempt_data_api(
     client: &Client,
     session: &SessionInfo,
     attempt_id: u64,
+    seb_cmid: Option<u64>,
 ) -> anyhow::Result<QuizAttemptData> {
-    let first = get_quiz_attempt_data_api(client, session, attempt_id, 0).await?;
+    let first = get_quiz_attempt_data_api(client, session, attempt_id, 0, seb_cmid).await?;
 
     let mut all_questions = first.questions.clone();
     let mut next = first.nextpage;
 
     while let Some(page) = next {
         if page < 0 { break; }
-        let page_data = get_quiz_attempt_data_api(client, session, attempt_id, page).await?;
+        let page_data = get_quiz_attempt_data_api(client, session, attempt_id, page, seb_cmid).await?;
         all_questions.extend(page_data.questions.clone());
         next = page_data.nextpage;
     }
@@ -291,8 +327,10 @@ pub async fn process_quiz_attempt_api(
     sequence_checks: &HashMap<u32, u64>,
     checkbox_slots: &HashSet<u32>,
     finish: bool,
+    seb_cmid: Option<u64>,
 ) -> anyhow::Result<String> {
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let seb_key = resolve_seb_hash(client, session, seb_cmid).await?;
 
     let mut args = HashMap::new();
     args.insert("attemptid".to_string(), serde_json::json!(attempt_id));
@@ -324,7 +362,7 @@ pub async fn process_quiz_attempt_api(
         }
     }
 
-    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "mod_quiz_process_attempt", &args).await?;
+    let data = quiz_api_call(client, &session.moodle_base_url, ws_token,
+        "mod_quiz_process_attempt", &args, seb_key.as_deref()).await?;
     Ok(data.get("state").and_then(|v| v.as_str()).unwrap_or("unknown").to_string())
 }

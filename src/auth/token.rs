@@ -8,6 +8,8 @@ pub struct SessionMeta {
     pub sesskey_timestamp: Option<i64>,
     pub ws_token: Option<String>,
     pub ws_token_timestamp: Option<i64>,
+    pub user_agent: Option<String>,
+    pub seb_config_key: Option<String>,
 }
 
 impl SessionMeta {
@@ -64,6 +66,13 @@ impl SessionMeta {
         self.ws_token = Some(token.to_string());
         self.ws_token_timestamp = Some(chrono::Utc::now().timestamp());
     }
+
+    /// Save user agent string.
+    pub fn set_user_agent(&mut self, ua: &str) {
+        self.user_agent = Some(ua.to_string());
+    }
+
+
 }
 
 /// Extract and decode the WS token from a moodlemobile:// URL.

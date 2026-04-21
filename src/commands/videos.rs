@@ -68,7 +68,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
 
             // Launch browser only for getting metadata
             let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
-            let launched = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
+            let launched = crate::auth::launch_persistent_session(&config, &ctx.log, true).await?;
 
             let mut completed = 0;
             for v in &videos {
@@ -157,7 +157,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             }
 
             let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
-            let launched = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
+            let launched = crate::auth::launch_persistent_session(&config, &ctx.log, true).await?;
 
             let mut completed = 0;
             for (cname, v) in &all_incomplete {
@@ -195,111 +195,139 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             format_and_output(&[result], ctx.output, None);
         }
 
-        crate::VideosCommands::Download { course_id, output_dir, incomplete_only } => {
-            // Phase 1: List videos via API (fast, no browser needed)
+        crate::VideosCommands::Download { course_id, output_dir, cmid } => {
+            let target_str = cmid.to_string();
+
+            let videos = if let Some(cid) = course_id {
+                get_supervideos_in_course_api(&ctx.client, &ctx.session, *cid).await?
+            } else {
+                let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, "inprogress").await?;
+                ctx.log.info(&format!("Scanning {} courses for cmid={}...", courses.len(), cmid));
+                let mut found = Vec::new();
+                for c in &courses {
+                    if let Ok(vs) = get_supervideos_in_course_api(&ctx.client, &ctx.session, c.id).await {
+                        for v in vs {
+                            if v.cmid == target_str {
+                                found.push(v);
+                            }
+                        }
+                    }
+                }
+                found
+            };
+
+            if videos.is_empty() {
+                ctx.log.info(&format!("No video found with cmid={}", cmid));
+                return Ok(());
+            }
+
+            download_videos(&ctx, cli, videos, output_dir).await?;
+        }
+
+        crate::VideosCommands::DownloadAll { course_id, output_dir, incomplete_only } => {
             let mut videos = get_supervideos_in_course_api(&ctx.client, &ctx.session, *course_id).await?;
             if *incomplete_only {
                 videos.retain(|v| !v.is_complete);
             }
+
             if videos.is_empty() {
                 ctx.log.info("No videos to download.");
                 return Ok(());
             }
 
-            ctx.log.info(&format!("Found {} videos", videos.len()));
-            tokio::fs::create_dir_all(output_dir).await?;
+            download_videos(&ctx, cli, videos, output_dir).await?;
+        }
+    }
 
-            // Phase 2: Launch browser session for authenticated page access
-            let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
-            let launched = crate::auth::launch_persistent_session(&config, &ctx.log).await?;
+    Ok(())
+}
 
-            // Extract cookies once for all downloads
-            let cookies = match crate::auth::get_cookies(&launched.page).await {
-                Ok(c) => c,
-                Err(e) => {
-                    crate::auth::close_persistent_session(launched).await;
-                    anyhow::bail!("Failed to extract cookies: {}", e);
-                }
-            };
+async fn download_videos(ctx: &ApiCtx, cli: &Cli, videos: Vec<SuperVideoModule>, output_dir: &std::path::PathBuf) -> Result<()> {
+    ctx.log.info(&format!("Found {} videos", videos.len()));
+    tokio::fs::create_dir_all(output_dir).await?;
 
-            // Phase 3: Process each video
-            let mut results: Vec<serde_json::Value> = Vec::new();
-            let mut downloaded = 0usize;
-            let mut failed = 0usize;
+    let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
+    let launched = crate::auth::launch_persistent_session(&config, &ctx.log, true).await?;
 
-            for v in &videos {
-                ctx.log.info(&format!("Processing: {}", v.name));
+    let cookies = match crate::auth::get_cookies(&launched.page).await {
+        Ok(c) => c,
+        Err(e) => {
+            crate::auth::close_persistent_session(launched).await;
+            anyhow::bail!("Failed to extract cookies: {}", e);
+        }
+    };
 
-                // Extract metadata via browser navigation
-                let metadata = match get_video_metadata_browser(&launched.page, &v.url, &ctx.log).await {
-                    Ok(m) => m,
-                    Err(e) => {
-                        ctx.log.warn(&format!("  Failed to get metadata: {}", e));
-                        results.push(serde_json::json!({
-                            "name": v.name, "success": false, "error": e.to_string(),
-                        }));
-                        failed += 1;
-                        continue;
-                    }
-                };
+    let mut results: Vec<serde_json::Value> = Vec::new();
+    let mut downloaded = 0usize;
+    let mut failed = 0usize;
 
-                // Priority 1: Direct video URL (pluginfile.php, .mp4, .webm)
-                let direct_url = metadata.video_sources.iter().find(|s| {
-                    s.contains("pluginfile.php") || s.ends_with(".mp4") || s.ends_with(".webm")
-                });
+    for v in &videos {
+        ctx.log.info(&format!("Processing: {}", v.name));
 
-                if let Some(url) = direct_url {
-                    let filename = sanitize_filename(&v.name, 200);
-                    let output_path = std::path::Path::new(output_dir).join(format!("{}.mp4", filename));
-                    let path_str = output_path.to_string_lossy().to_string();
+        let metadata = match get_video_metadata_browser(&launched.page, &v.url, &ctx.log).await {
+            Ok(m) => m,
+            Err(e) => {
+                ctx.log.warn(&format!("  Failed to get metadata: {}", e));
+                results.push(serde_json::json!({
+                    "name": v.name, "success": false, "error": e.to_string(),
+                }));
+                failed += 1;
+                continue;
+            }
+        };
 
-                    match download_video_with_cookies(&cookies, url, &path_str, &ctx.log).await {
-                        Ok(size) => {
-                            ctx.log.success(&format!("  Downloaded: {} ({:.1} KB)",
-                                v.name, size as f64 / 1024.0));
-                            results.push(serde_json::json!({
-                                "name": v.name, "success": true, "path": path_str,
-                                "type": "direct", "size": size,
-                            }));
-                            downloaded += 1;
-                        }
-                        Err(e) => {
-                            ctx.log.warn(&format!("  Download failed: {}", e));
-                            results.push(serde_json::json!({
-                                "name": v.name, "success": false, "error": e.to_string(),
-                            }));
-                            failed += 1;
-                        }
-                    }
-                } else if !metadata.youtube_ids.is_empty() {
-                    let yt_url = format!("https://www.youtube.com/watch?v={}", metadata.youtube_ids[0]);
-                    ctx.log.warn(&format!("  YouTube video: {}", yt_url));
-                    ctx.log.info("  Use yt-dlp to download YouTube videos.");
+        let direct_url = metadata.video_sources.iter().find(|s| {
+            s.contains("pluginfile.php") || s.ends_with(".mp4") || s.ends_with(".webm")
+        });
+
+        if let Some(url) = direct_url {
+            let filename = sanitize_filename(&v.name, 200);
+            let output_path = output_dir.join(format!("{}.mp4", filename));
+            let path_str = output_path.to_string_lossy().to_string();
+
+            match download_video_with_cookies(&cookies, url, &path_str, &ctx.log).await {
+                Ok(size) => {
+                    ctx.log.success(&format!("  Downloaded: {} ({:.1} KB)",
+                        v.name, size as f64 / 1024.0));
                     results.push(serde_json::json!({
-                        "name": v.name, "success": false,
-                        "error": format!("YouTube video — use yt-dlp: yt-dlp {}", yt_url),
-                        "type": "youtube",
+                        "name": v.name, "success": true, "path": path_str,
+                        "type": "direct", "size": size,
                     }));
-                    failed += 1;
-                } else {
-                    ctx.log.warn("  No downloadable video source found (embedded/blob URL).");
+                    downloaded += 1;
+                }
+                Err(e) => {
+                    ctx.log.warn(&format!("  Download failed: {}", e));
                     results.push(serde_json::json!({
-                        "name": v.name, "success": false,
-                        "error": "No downloadable video source found",
-                        "type": "embedded",
+                        "name": v.name, "success": false, "error": e.to_string(),
                     }));
                     failed += 1;
                 }
             }
-
-            // Phase 4: Close browser
-            crate::auth::close_persistent_session(launched).await;
-
-            ctx.log.info(&format!("\nResult: {} downloaded, {} failed", downloaded, failed));
-            format_and_output(&results, ctx.output, None);
+        } else if !metadata.youtube_ids.is_empty() {
+            let yt_url = format!("https://www.youtube.com/watch?v={}", metadata.youtube_ids[0]);
+            ctx.log.warn(&format!("  YouTube video: {}", yt_url));
+            ctx.log.info("  Use yt-dlp to download YouTube videos.");
+            results.push(serde_json::json!({
+                "name": v.name, "success": false,
+                "error": format!("YouTube video — use yt-dlp: yt-dlp {}", yt_url),
+                "type": "youtube",
+            }));
+            failed += 1;
+        } else {
+            ctx.log.warn("  No downloadable video source found (embedded/blob URL).");
+            results.push(serde_json::json!({
+                "name": v.name, "success": false,
+                "error": "No downloadable video source found",
+                "type": "embedded",
+            }));
+            failed += 1;
         }
     }
 
+    crate::auth::close_persistent_session(launched).await;
+
+    ctx.log.info(&format!("\nResult: {} downloaded, {} failed", downloaded, failed));
+    format_and_output(&results, ctx.output, None);
     Ok(())
 }
 
