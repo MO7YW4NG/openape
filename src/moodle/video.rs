@@ -1,7 +1,6 @@
 use super::client::moodle_api_call;
 use crate::moodle_args;
 use crate::auth::{Cookie, cookies_to_cookie_header};
-use super::course::get_site_info;
 use super::types::{SessionInfo, SuperVideoModule};
 use crate::logger::Logger;
 use reqwest::Client;
@@ -41,8 +40,8 @@ pub async fn get_supervideos_in_course_api(
     }
 
     // Get completion status
-    if let Ok(site_info) = get_site_info(client, session).await {
-        let comp_args = moodle_args!("courseid" => course_id, "userid" => site_info.userid);
+    if session.user_id > 0 {
+        let comp_args = moodle_args!("courseid" => course_id, "userid" => session.user_id);
         if let Ok(comp_data) = moodle_api_call(client, &session.moodle_base_url, ws_token,
             "core_completion_get_activities_completion_status", &comp_args).await
         {

@@ -13,23 +13,15 @@ pub async fn run(cmd: &crate::GradesCommands, cli: &Cli) -> Result<()> {
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, "inprogress").await?;
 
             let mut summaries: Vec<serde_json::Value> = Vec::new();
-            let mut ranked_count = 0u32;
-            let mut rank_sum = 0u64;
 
             for course in &courses {
-                match get_course_grades_api(&ctx.client, &ctx.session, course.id).await {
-                    Ok(grade) => {
-                        if let (Some(rank), Some(_total)) = (grade.rank, grade.total_users) {
-                            ranked_count += 1;
-                            rank_sum += rank as u64;
-                        }
+                match get_course_grades_api(&ctx.client, &ctx.session, course.id, ctx.session.user_id).await {
+                    Ok(mut grade) => {
+                        grade.course_name = course.fullname.clone();
                         summaries.push(serde_json::json!({
                             "courseId": grade.course_id,
                             "courseName": grade.course_name,
                             "grade": grade.grade,
-                            "gradeFormatted": grade.grade_formatted,
-                            "rank": grade.rank,
-                            "totalUsers": grade.total_users,
                         }));
                     }
                     Err(e) => {
@@ -42,47 +34,44 @@ pub async fn run(cmd: &crate::GradesCommands, cli: &Cli) -> Result<()> {
                 g.get("grade").map(|v| !v.is_null() && v.as_str() != Some("-")).unwrap_or(false)
             }).count();
 
-            let avg_rank = if ranked_count > 0 {
-                format!("{:.1}", rank_sum as f64 / ranked_count as f64)
-            } else {
-                "N/A".to_string()
-            };
-
             ctx.log.info(&format!(
-                "Total: {} courses, {} graded, avg rank: {}",
-                courses.len(), graded, avg_rank
+                "Total: {} courses, {} graded",
+                courses.len(), graded,
             ));
 
             format_and_output(&summaries, ctx.output, None);
         }
 
         crate::GradesCommands::Course { course_id } => {
-            let grade = get_course_grades_api(&ctx.client, &ctx.session, *course_id).await?;
+            let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, "all").await?;
+            let course_name = courses.iter()
+                .find(|c| c.id == *course_id)
+                .map(|c| c.fullname.as_str())
+                .unwrap_or("");
 
-            let items: Vec<serde_json::Value> = grade.items.as_deref().unwrap_or(&[]).iter()
-                .map(|item| serde_json::json!({
+            let mut grade = get_course_grades_api(&ctx.client, &ctx.session, *course_id, ctx.session.user_id).await?;
+            grade.course_name = course_name.to_string();
+
+            let mut rows: Vec<serde_json::Value> = Vec::new();
+            rows.push(serde_json::json!({
+                "courseId": grade.course_id,
+                "courseName": &grade.course_name,
+                "grade": grade.grade,
+            }));
+
+            for item in grade.items.as_deref().unwrap_or(&[]) {
+                rows.push(serde_json::json!({
                     "name": item.name,
                     "grade": item.grade,
-                    "gradeFormatted": item.grade_formatted,
-                    "range": item.range,
                     "percentage": item.percentage,
                     "weight": item.weight,
                     "feedback": item.feedback,
                     "graded": item.graded,
-                }))
-                .collect();
+                }));
+            }
 
-            let result = serde_json::json!({
-                "courseId": grade.course_id,
-                "courseName": grade.course_name,
-                "grade": grade.grade,
-                "gradeFormatted": grade.grade_formatted,
-                "rank": grade.rank,
-                "totalUsers": grade.total_users,
-                "items": items,
-            });
-
-            format_and_output(&[result], ctx.output, None);
+            ctx.log.info(&format!("Found {} grade items", rows.len() - 1));
+            format_and_output(&rows, ctx.output, None);
         }
     }
 

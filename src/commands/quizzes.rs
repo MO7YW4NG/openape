@@ -87,7 +87,7 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             match get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, attempt.attemptid, None).await {
                 Ok(data) => {
                     let questions: Vec<serde_json::Value> = data.questions.values()
-                        .map(|q| format_question_json(q))
+                        .map(format_question_json)
                         .collect();
                     let total = questions.len();
 
@@ -133,7 +133,7 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             };
 
             let mut questions: Vec<serde_json::Value> = data.questions.values()
-                .map(|q| format_question_json(q))
+                .map(format_question_json)
                 .collect();
             questions.sort_by_key(|q| q.get("slot").and_then(|v| v.as_u64()).unwrap_or(0));
 
@@ -268,7 +268,7 @@ fn maybe_convert_choice_index(s: &str) -> String {
             "h" | "H" => "7",
             "i" | "I" => "8",
             "j" | "J" => "9",
-            _ => return s,
+            _ => s,
         }
     }
 

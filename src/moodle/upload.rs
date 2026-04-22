@@ -1,4 +1,4 @@
-use super::course::{get_site_info, get_user_context_id};
+use super::course::get_user_context_id;
 use super::types::SessionInfo;
 use reqwest::Client;
 
@@ -17,7 +17,6 @@ pub async fn upload_file_api(
     filepath: Option<&str>,
 ) -> anyhow::Result<u64> {
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
-    let site_info = get_site_info(client, session).await?;
     let draft_item_id = draft_id.unwrap_or_else(generate_draft_item_id);
     let file_name = filename.unwrap_or_else(|| {
         std::path::Path::new(file_path).file_name()
@@ -25,7 +24,7 @@ pub async fn upload_file_api(
             .unwrap_or("unknown")
     });
     let file_bytes = tokio::fs::read(file_path).await?;
-    let user_context_id = get_user_context_id(site_info.userid);
+    let user_context_id = get_user_context_id(session.user_id);
 
     let form = reqwest::multipart::Form::new()
         .text("token", ws_token.clone())

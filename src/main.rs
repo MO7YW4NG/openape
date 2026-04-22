@@ -230,6 +230,10 @@ pub enum QuizzesCommands {
 
 #[derive(Subcommand)]
 pub enum MaterialsCommands {
+    /// List materials in a specific course
+    List {
+        course_id: u64,
+    },
     /// List all materials across all courses
     ListAll {
         #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]

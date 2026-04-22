@@ -1,5 +1,4 @@
 use super::client::moodle_api_call;
-use super::course::get_site_info;
 use super::types::{AssignmentModule, DraftFile, SubmissionStatus, SessionInfo};
 use crate::moodle_args;
 use reqwest::Client;
@@ -51,9 +50,8 @@ pub async fn get_submission_status_api(
     session: &SessionInfo,
     assignment_id: u64,
 ) -> anyhow::Result<SubmissionStatus> {
-    let site_info = get_site_info(client, session).await?;
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
-    let args = moodle_args!("assignid" => assignment_id, "userid" => site_info.userid);
+    let args = moodle_args!("assignid" => assignment_id, "userid" => session.user_id);
     let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
         "mod_assign_get_submission_status", &args).await?;
 
@@ -105,7 +103,6 @@ pub async fn save_submission_api(
     online_text: Option<&str>,
     file_id: Option<u64>,
 ) -> anyhow::Result<()> {
-    let site_info = get_site_info(client, session).await?;
     let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
 
     let mut plugins = Vec::new();
@@ -124,7 +121,7 @@ pub async fn save_submission_api(
 
     let args = moodle_args!(
         "assignmentid" => assignment_id,
-        "userid" => site_info.userid,
+        "userid" => session.user_id,
         "plugins" => plugins
     );
     moodle_api_call(client, &session.moodle_base_url, ws_token,

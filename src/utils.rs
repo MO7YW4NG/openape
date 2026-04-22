@@ -67,6 +67,48 @@ pub fn format_moodle_date(timestamp: Option<i64>) -> String {
     }
 }
 
+/// Percent-encode a string for use in URL path segments.
+/// Encodes all bytes except unreserved ASCII (alphanumeric, `-`, `.`, `_`, `~`).
+pub fn percent_encode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'.' || b == b'_' || b == b'~' {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{:02X}", b));
+        }
+    }
+    out
+}
+
+/// Percent-decode a string (handles %XX sequences).
+fn hex_val(b: u8) -> Option<u8> {
+    match b {
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        b'0'..=b'9' => Some(b - b'0'),
+        _ => None,
+    }
+}
+
+pub fn percent_decode(s: &str) -> String {
+    let bytes = s.as_bytes();
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'%' && i + 2 < bytes.len() {
+            if let (Some(h), Some(l)) = (hex_val(bytes[i + 1]), hex_val(bytes[i + 2])) {
+                out.push(h * 16 + l);
+                i += 3;
+                continue;
+            }
+        }
+        out.push(bytes[i]);
+        i += 1;
+    }
+    String::from_utf8_lossy(&out).to_string()
+}
+
 /// Strip HTML tags but preserve line breaks from <br> and </p>.
 pub fn strip_html_keep_lines(html: &str) -> String {
     if html.is_empty() {
@@ -85,7 +127,7 @@ pub fn strip_html_keep_lines(html: &str) -> String {
         .replace("&quot;", "\"")
         .replace("&#39;", "'");
     Regex::new(r"\n{3,}").unwrap()
-        .replace_all(&text.trim(), "\n\n")
+        .replace_all(text.trim(), "\n\n")
         .trim()
         .to_string()
 }

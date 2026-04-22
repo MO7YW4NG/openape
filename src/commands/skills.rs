@@ -73,7 +73,7 @@ pub async fn run(cmd: &crate::SkillsCommands, cli: &crate::Cli) -> Result<()> {
 
             if *all {
                 for (_, plat) in platforms() {
-                    if plat.path.parent().map_or(false, |p| p.exists()) {
+                    if plat.path.parent().is_some_and(|p| p.exists()) {
                         targets.push(plat);
                     }
                 }

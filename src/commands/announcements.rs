@@ -1,6 +1,5 @@
 use anyhow::Result;
 use crate::Cli;
-use crate::moodle::course::get_site_info;
 use crate::moodle::message::get_messages_api;
 use crate::moodle::forum::get_discussion_posts_api;
 use crate::output::format_and_output;
@@ -12,10 +11,9 @@ pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
 
     match cmd {
         crate::AnnouncementsCommands::ListAll { unread_only, limit } => {
-            let site_info = get_site_info(&ctx.client, &ctx.session).await?;
             let messages = get_messages_api(
                 &ctx.client, &ctx.session,
-                site_info.userid, None,
+                ctx.session.user_id, None,
                 if *unread_only { Some(false) } else { None },
                 Some(*limit),
             ).await?;

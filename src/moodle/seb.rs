@@ -87,11 +87,7 @@ fn parse_plist(xml: &str) -> Value {
             let val = read_until(bytes, pos, len, b'<');
             skip_close_tag(bytes, pos, len);
             Value::String(val)
-        } else if expect(bytes, pos, len, b"<data>") {
-            let val = read_until(bytes, pos, len, b'<');
-            skip_close_tag(bytes, pos, len);
-            Value::String(val.trim().to_string())
-        } else if expect(bytes, pos, len, b"<date>") {
+        } else if expect(bytes, pos, len, b"<data>") || expect(bytes, pos, len, b"<date>") {
             let val = read_until(bytes, pos, len, b'<');
             skip_close_tag(bytes, pos, len);
             Value::String(val.trim().to_string())
@@ -130,20 +126,12 @@ fn parse_plist(xml: &str) -> Value {
     loop {
         skip_ws(bytes, &mut pos, len);
         if pos >= len { break; }
-        if pos + 2 <= len && &bytes[pos..pos+2] == b"<?" {
-            while pos < len && !(bytes[pos] == b'>' && pos > 0 && bytes[pos-1] == b'?') {
-                pos += 1;
-            }
-            if pos < len { pos += 1; }
-        } else if pos + 2 <= len && &bytes[pos..pos+2] == b"<!" {
-            while pos < len && bytes[pos] != b'>' {
-                pos += 1;
-            }
-            if pos < len { pos += 1; }
-        } else if pos + 6 <= len && &bytes[pos..pos+6] == b"<plist" {
-            while pos < len && bytes[pos] != b'>' {
-                pos += 1;
-            }
+        let skip_tag_prefix = |pos: &usize, len: usize, prefix: &[u8]| -> bool {
+            *pos + prefix.len() <= len && &bytes[*pos..*pos + prefix.len()] == prefix
+        };
+
+        if skip_tag_prefix(&pos, len, b"<?") || skip_tag_prefix(&pos, len, b"<!") || skip_tag_prefix(&pos, len, b"<plist") {
+            while pos < len && bytes[pos] != b'>' { pos += 1; }
             if pos < len { pos += 1; }
         } else {
             break;

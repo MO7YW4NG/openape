@@ -74,8 +74,8 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
         }
 
         crate::AuthCommands::Status => {
-            let (has_sesskey, sesskey, ws_token) = auth::check_session_status(&config);
-            let active = has_sesskey || ws_token.is_some();
+            let (has_session, ws_token) = auth::check_session_status(&config);
+            let active = has_session || ws_token.is_some();
 
             let session_path = Path::new(&config.auth_state_path);
             let auth_dir = session_path.parent().unwrap_or(Path::new(".auth"));
@@ -117,9 +117,6 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
 
             if active {
                 log.success("Session active");
-                if let Some(sk) = &sesskey {
-                    log.info(&format!("  sesskey: {}", sk));
-                }
                 if let Some(wt) = &ws_token {
                     log.info(&format!("  WS token: {}...", &wt[..wt.len().min(20)]));
                 }
@@ -141,7 +138,6 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
                     "expires": moodle_session_expires,
                 },
                 "active": active,
-                "sesskey": sesskey.as_deref().map(|s| &s[..s.len().min(20)]),
                 "ws_token_prefix": ws_token.as_deref().map(|t| &t[..t.len().min(20)]),
                 "hint": if active { None } else { Some("Run 'openape login' first") },
             });

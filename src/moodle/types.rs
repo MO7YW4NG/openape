@@ -7,6 +7,7 @@ pub struct SessionInfo {
     pub moodle_base_url: String,
     pub ws_token: Option<String>,
     pub user_agent: Option<String>,
+    pub user_id: u64,
 }
 
 // ── Course ────────────────────────────────────────────────────────────────
@@ -212,25 +213,14 @@ pub struct CourseGrade {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub grade_formatted: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub rank: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub total_users: Option<u32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub items: Option<Vec<GradeItem>>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GradeItem {
-    pub id: u64,
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub grade: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub grade_formatted: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub range: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub percentage: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -247,8 +237,12 @@ pub struct ResourceModule {
     pub cmid: String,
     pub name: String,
     pub url: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub view_url: Option<String>,
     pub course_id: u64,
     pub mod_type: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub contextid: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mimetype: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -328,9 +322,3 @@ pub struct PageModule {
     pub timemodified: Option<i64>,
 }
 
-// ── Site Info ─────────────────────────────────────────────────────────────
-
-#[derive(Debug, Clone)]
-pub struct SiteInfo {
-    pub userid: u64,
-}

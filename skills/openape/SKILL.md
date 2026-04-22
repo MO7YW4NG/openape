@@ -58,6 +58,7 @@ openape <command> [subcommand] [args] [flags]
 
 ### materials — Material/resource operations
 
+  - `list <course-id>` — List materials in a course
   - `list-all` — List all materials across courses. Flags: `--level in_progress|all`
   - `download <course-id>` — Download all materials from a course
   - `download-all` — Download all materials from all courses. Flags: `--output-dir <path>`

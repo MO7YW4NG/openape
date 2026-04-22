@@ -1,6 +1,6 @@
 use super::client::moodle_api_call;
 use crate::utils::extract_course_name;
-use super::types::{EnrolledCourse, SessionInfo, SiteInfo};
+use super::types::{EnrolledCourse, SessionInfo};
 use reqwest::Client;
 use std::collections::HashMap;
 
@@ -40,21 +40,6 @@ pub async fn get_enrolled_courses_api(
             enddate: c.get("enddate").and_then(|v| v.as_i64()),
         }
     }).collect())
-}
-
-/// Get site info including current user ID.
-pub async fn get_site_info(
-    client: &Client,
-    session: &SessionInfo,
-) -> anyhow::Result<SiteInfo> {
-    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
-    let args = HashMap::new();
-    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "core_webservice_get_site_info", &args).await?;
-
-    Ok(SiteInfo {
-        userid: data.get("userid").and_then(|v| v.as_u64()).unwrap_or(0),
-    })
 }
 
 /// Calculate Moodle user context ID.

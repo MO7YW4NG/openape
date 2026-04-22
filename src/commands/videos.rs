@@ -84,7 +84,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 };
 
                 // 2. Complete via API
-                match complete_video(&ctx, &v, &metadata).await {
+                match complete_video(&ctx, v, &metadata).await {
                     Ok(()) => {
                         ctx.log.success(&format!("  Completed: {}", v.name));
                         completed += 1;
@@ -171,7 +171,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                     }
                 };
 
-                match complete_video(&ctx, &v, &metadata).await {
+                match complete_video(&ctx, v, &metadata).await {
                     Ok(()) => {
                         ctx.log.success(&format!("  Completed: {}", v.name));
                         completed += 1;

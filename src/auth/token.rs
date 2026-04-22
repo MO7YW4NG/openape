@@ -1,13 +1,12 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
-/// Cached session metadata (sesskey + WS token with expiration).
+/// Cached session metadata (user ID + WS token with expiration).
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct SessionMeta {
-    pub sesskey: Option<String>,
-    pub sesskey_timestamp: Option<i64>,
     pub ws_token: Option<String>,
     pub ws_token_timestamp: Option<i64>,
+    pub user_id: Option<u64>,
     pub user_agent: Option<String>,
     pub seb_config_key: Option<String>,
 }
@@ -39,15 +38,9 @@ impl SessionMeta {
         dir.join("session-meta.json").to_string_lossy().to_string()
     }
 
-    /// Load sesskey if cached and not expired (6 hours).
-    pub fn get_sesskey(&self) -> Option<String> {
-        if let (Some(ref key), Some(ts)) = (&self.sesskey, self.sesskey_timestamp) {
-            let age = chrono::Utc::now().timestamp() - ts;
-            if age < 6 * 3600 {
-                return Some(key.clone());
-            }
-        }
-        None
+    /// Save user ID.
+    pub fn set_user_id(&mut self, id: u64) {
+        self.user_id = Some(id);
     }
 
     /// Load WS token if cached and not expired (24 hours).

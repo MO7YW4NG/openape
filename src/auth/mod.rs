@@ -1,10 +1,10 @@
 //! Authentication system: login, session management, token acquisition.
 
-mod browser;
+pub mod browser;
 mod token;
 
-pub use browser::{Cookie, cookies_to_cookie_header, get_cookies, LaunchedBrowser};
-use browser::{close_browser, find_browser_paths, launch_browser, set_cookies, get_user_data_dir};
+pub use browser::{Cookie, cookies_to_cookie_header, find_browser_paths, get_cookies, launch_browser, close_browser, set_cookies, LaunchedBrowser};
+use browser::get_user_data_dir;
 use token::{extract_token_from_custom_scheme, SessionMeta};
 
 use std::path::Path;
@@ -86,7 +86,7 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
         if meta.user_agent.is_none() {
             if let Some(ua) = get_browser_user_agent(&launched.page).await {
                 meta.set_user_agent(&ua);
-                let _ = meta.save(&config.auth_state_path);
+                meta.save(&config.auth_state_path);
             }
         }
 
@@ -95,8 +95,9 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
             match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
                 Ok(token) => {
                     meta.set_ws_token(&token);
+                    ws_token = Some(token.clone());
+                    save_user_id(&mut meta, &token, &config.moodle_base_url, log).await;
                     meta.save(&config.auth_state_path);
-                    ws_token = Some(token);
                 }
                 Err(e) => {
                     log.warn(&format!("Failed to acquire WS Token: {}", e));
@@ -138,20 +139,21 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
             match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
                 Ok(token) => {
                     meta.set_ws_token(&token);
+                    ws_token = Some(token.clone());
+                    save_user_id(&mut meta, &token, &config.moodle_base_url, log).await;
                     meta.save(&config.auth_state_path);
-                    ws_token = Some(token);
                 }
                 Err(e) => {
                     log.warn(&format!("Failed to acquire WS Token: {}", e));
                 }
             }
         }
-        
+
         // Save cookies
         if let Ok(cookies) = get_cookies(&launched.page).await {
             save_cookies(&config.auth_state_path, &cookies);
         }
-        
+
         return Ok((launched, ws_token));
     }
 
@@ -168,15 +170,16 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
         match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
             Ok(token) => {
                 meta.set_ws_token(&token);
+                ws_token = Some(token.clone());
+                save_user_id(&mut meta, &token, &config.moodle_base_url, log).await;
                 meta.save(&config.auth_state_path);
-                ws_token = Some(token);
             }
             Err(e) => {
                 log.warn(&format!("Failed to acquire WS Token: {}", e));
             }
         }
     }
-    
+
     // Save cookies
     if let Ok(cookies) = get_cookies(&launched.page).await {
         save_cookies(&config.auth_state_path, &cookies);
@@ -197,6 +200,7 @@ pub fn create_api_context(config: &AppConfig, log: &Logger) -> anyhow::Result<Se
         moodle_base_url: config.moodle_base_url.clone(),
         ws_token: Some(ws_token),
         user_agent: meta.user_agent.clone(),
+        user_id: meta.user_id.unwrap_or(0),
     })
 }
 
@@ -305,15 +309,31 @@ async fn acquire_ws_token(page: &Page, base_url: &str, log: &Logger) -> anyhow::
     anyhow::bail!("Token acquisition failed: no Location header received (status {}).", resp.status())
 }
 
+/// Fetch and save user ID from Moodle site info API.
+async fn save_user_id(meta: &mut SessionMeta, ws_token: &str, base_url: &str, log: &Logger) {
+    if meta.user_id.is_some() { return; }
+    let url = format!(
+        "{}/webservice/rest/server.php?wstoken={}&wsfunction=core_webservice_get_site_info&moodlewsrestformat=json",
+        base_url, ws_token
+    );
+    if let Ok(resp) = reqwest::get(&url).await {
+        if let Ok(json) = resp.json::<serde_json::Value>().await {
+            if let Some(id) = json.get("userid").and_then(|v| v.as_u64()) {
+                meta.set_user_id(id);
+                log.debug(&format!("Saved user ID: {}", id));
+            }
+        }
+    }
+}
+
 /// Check session status without launching a browser.
-pub fn check_session_status(config: &AppConfig) -> (bool, Option<String>, Option<String>) {
+pub fn check_session_status(config: &AppConfig) -> (bool, Option<String>) {
     let meta = SessionMeta::load(&config.auth_state_path);
     let ws_token = meta.get_ws_token();
-    let sesskey = meta.get_sesskey();
     let cookies_path = get_cookies_path(&config.auth_state_path);
     let has_session = cookies_path.exists();
 
-    (has_session, sesskey, ws_token)
+    (has_session, ws_token)
 }
 
 /// Remove saved session files.
@@ -438,7 +458,7 @@ fn save_cookies(auth_state_path: &str, cookies: &[Cookie]) {
     }
 }
 
-fn load_cookies(auth_state_path: &str) -> anyhow::Result<Vec<Cookie>> {
+pub fn load_cookies(auth_state_path: &str) -> anyhow::Result<Vec<Cookie>> {
     let path = get_cookies_path(auth_state_path);
     let content = std::fs::read_to_string(&path)?;
     let cookies: Vec<Cookie> = serde_json::from_str(&content)?;
