@@ -31,9 +31,10 @@ npx @mo7yw4ng/openape --help
 ## 核心指令
 
 ### 登入與驗證 (Authentication)
-第一次使用需要登入，會開啟瀏覽器讓你手動完成登入，隨後會快取 Session 供未來使用。
+第一次使用需先登入，登入成功後會快取 Session，之後可直接執行指令。若 Session 失效，請重新登入。
 ```bash
-openape login          # 登入並儲存 session (開啟瀏覽器)
+openape login          # 手動登入
+openape login --id <student-id> --password <password>  # 登入並儲存帳密 (自動重登)
 openape status         # 檢查當前登入狀態
 openape logout         # 登出並清除 session
 ```
