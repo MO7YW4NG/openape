@@ -1,10 +1,10 @@
-use anyhow::Result;
-use crate::Cli;
-use crate::moodle::message::get_messages_api;
+use super::ApiCtx;
 use crate::moodle::forum::get_discussion_posts_api;
+use crate::moodle::message::get_messages_api;
 use crate::output::format_and_output;
 use crate::utils::format_moodle_date;
-use super::ApiCtx;
+use crate::Cli;
+use anyhow::Result;
 
 pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
     let ctx = ApiCtx::build(cli)?;
@@ -12,25 +12,31 @@ pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
     match cmd {
         crate::AnnouncementsCommands::ListAll { unread_only, limit } => {
             let messages = get_messages_api(
-                &ctx.client, &ctx.session,
-                ctx.session.user_id, None,
+                &ctx.client,
+                &ctx.session,
+                ctx.session.user_id,
+                None,
                 if *unread_only { Some(false) } else { None },
                 Some(*limit),
-            ).await?;
+            )
+            .await?;
 
-            let mut items: Vec<serde_json::Value> = messages.iter().map(|m| {
-                let unread = m.timecreated > 0; // Moodle core_message_get_messages with read=false only returns unread
-                serde_json::json!({
-                    "course_id": 0,
-                    "course_name": "Notifications",
-                    "id": m.id,
-                    "subject": m.subject,
-                    "author": format!("User {}", m.useridfrom),
-                    "author_id": m.useridfrom,
-                    "created_at": format_moodle_date(Some(m.timecreated)),
-                    "unread": unread,
+            let mut items: Vec<serde_json::Value> = messages
+                .iter()
+                .map(|m| {
+                    let unread = m.timecreated > 0; // Moodle core_message_get_messages with read=false only returns unread
+                    serde_json::json!({
+                        "course_id": 0,
+                        "course_name": "Notifications",
+                        "id": m.id,
+                        "subject": m.subject,
+                        "author": format!("User {}", m.useridfrom),
+                        "author_id": m.useridfrom,
+                        "created_at": format_moodle_date(Some(m.timecreated)),
+                        "unread": unread,
+                    })
                 })
-            }).collect();
+                .collect();
 
             // Sort by created_at descending (already strings, lexicographic sort works for ISO dates)
             items.sort_by(|a, b| {
@@ -41,14 +47,14 @@ pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
 
             let shown: Vec<_> = items.into_iter().take(*limit as usize).collect();
 
-            ctx.log.info(&format!("Showing {} announcements", shown.len()));
+            ctx.log
+                .info(&format!("Showing {} announcements", shown.len()));
             format_and_output(&shown, ctx.output, None);
         }
 
         crate::AnnouncementsCommands::Read { announcement_id } => {
-            let posts = get_discussion_posts_api(
-                &ctx.client, &ctx.session, *announcement_id,
-            ).await?;
+            let posts =
+                get_discussion_posts_api(&ctx.client, &ctx.session, *announcement_id).await?;
 
             if posts.is_empty() {
                 anyhow::bail!("Announcement not found: {}", announcement_id);

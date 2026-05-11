@@ -1,5 +1,4 @@
 pub mod announcements;
-pub mod pages;
 pub mod assignments;
 pub mod auth;
 pub mod calendar;
@@ -7,6 +6,7 @@ pub mod courses;
 pub mod forums;
 pub mod grades;
 pub mod materials;
+pub mod pages;
 pub mod quizzes;
 pub mod skills;
 pub mod upload;
@@ -36,7 +36,9 @@ impl ApiCtx {
             log.debug(&format!("Using User-Agent: {}", full_ua));
             builder = builder.user_agent(full_ua);
         }
-        if let Some(cookie_header) = crate::auth::load_cookie_header(&config.auth_state_path, &config.moodle_base_url) {
+        if let Some(cookie_header) =
+            crate::auth::load_cookie_header(&config.auth_state_path, &config.moodle_base_url)
+        {
             log.debug("Injecting saved session cookies into HTTP client.");
             let mut headers = reqwest::header::HeaderMap::new();
             if let Ok(val) = reqwest::header::HeaderValue::from_str(&cookie_header) {
@@ -47,7 +49,12 @@ impl ApiCtx {
         let client = builder
             .build()
             .map_err(|e| anyhow::anyhow!("Failed to create HTTP client: {}", e))?;
-        Ok(ApiCtx { client, session, log, output: cli.output })
+        Ok(ApiCtx {
+            client,
+            session,
+            log,
+            output: cli.output,
+        })
     }
 }
 

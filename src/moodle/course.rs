@@ -1,6 +1,6 @@
 use super::client::moodle_api_call;
-use crate::utils::extract_course_name;
 use super::types::{EnrolledCourse, SessionInfo};
+use crate::utils::extract_course_name;
 use reqwest::Client;
 use std::collections::HashMap;
 
@@ -10,36 +10,61 @@ pub async fn get_enrolled_courses_api(
     session: &SessionInfo,
     classification: &str,
 ) -> anyhow::Result<Vec<EnrolledCourse>> {
-    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let ws_token = session
+        .ws_token
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("WS token required"))?;
 
     let mut args = HashMap::new();
     args.insert("offset".to_string(), serde_json::json!(0));
     args.insert("limit".to_string(), serde_json::json!(0));
-    args.insert("classification".to_string(), serde_json::json!(classification));
+    args.insert(
+        "classification".to_string(),
+        serde_json::json!(classification),
+    );
     args.insert("sort".to_string(), serde_json::json!("fullname"));
     args.insert("customfieldname".to_string(), serde_json::json!(""));
     args.insert("customfieldvalue".to_string(), serde_json::json!(""));
 
-    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "core_course_get_enrolled_courses_by_timeline_classification", &args).await?;
+    let data = moodle_api_call(
+        client,
+        &session.moodle_base_url,
+        ws_token,
+        "core_course_get_enrolled_courses_by_timeline_classification",
+        &args,
+    )
+    .await?;
 
-    let courses = data.get("courses")
+    let courses = data
+        .get("courses")
         .and_then(|c| c.as_array())
         .cloned()
         .unwrap_or_default();
 
-    Ok(courses.into_iter().map(|c| {
-        EnrolledCourse {
+    Ok(courses
+        .into_iter()
+        .map(|c| EnrolledCourse {
             id: c.get("id").and_then(|v| v.as_u64()).unwrap_or(0),
             fullname: extract_course_name(c.get("fullname").and_then(|v| v.as_str()).unwrap_or("")),
-            shortname: c.get("shortname").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-            idnumber: c.get("idnumber").and_then(|v| v.as_str()).map(|s| s.to_string()),
-            category: c.get("category").and_then(|cat| cat.get("name")).and_then(|n| n.as_str()).map(|s| s.to_string()),
+            shortname: c
+                .get("shortname")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_string(),
+            idnumber: c
+                .get("idnumber")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string()),
+            category: c
+                .get("category")
+                .and_then(|cat| cat.get("name"))
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string()),
             progress: c.get("progress").and_then(|v| v.as_u64()).map(|p| p as u32),
             startdate: c.get("startdate").and_then(|v| v.as_i64()),
             enddate: c.get("enddate").and_then(|v| v.as_i64()),
-        }
-    }).collect())
+        })
+        .collect())
 }
 
 /// Calculate Moodle user context ID.

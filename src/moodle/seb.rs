@@ -8,7 +8,10 @@ pub async fn fetch_seb_config_key(
     base_url: &str,
     cmid: u64,
 ) -> anyhow::Result<String> {
-    let url = format!("{}/mod/quiz/accessrule/seb/config.php?cmid={}", base_url, cmid);
+    let url = format!(
+        "{}/mod/quiz/accessrule/seb/config.php?cmid={}",
+        base_url, cmid
+    );
     let resp = client.get(&url).send().await?;
     let text = resp.text().await?;
     if text.trim().is_empty() || !text.contains("<plist") {
@@ -29,7 +32,12 @@ fn parse_plist(xml: &str) -> Value {
     let len = bytes.len();
 
     fn skip_ws(bytes: &[u8], pos: &mut usize, len: usize) {
-        while *pos < len && (bytes[*pos] == b' ' || bytes[*pos] == b'\n' || bytes[*pos] == b'\r' || bytes[*pos] == b'\t') {
+        while *pos < len
+            && (bytes[*pos] == b' '
+                || bytes[*pos] == b'\n'
+                || bytes[*pos] == b'\r'
+                || bytes[*pos] == b'\t')
+        {
             *pos += 1;
         }
     }
@@ -49,19 +57,27 @@ fn parse_plist(xml: &str) -> Value {
             *pos += 1;
         }
         let s = String::from_utf8_lossy(&bytes[start..*pos]).to_string();
-        if *pos < len { *pos += 1; }
+        if *pos < len {
+            *pos += 1;
+        }
         s
     }
 
     // Skip the rest of a closing tag after read_until consumed the '<'.
     fn skip_close_tag(bytes: &[u8], pos: &mut usize, len: usize) {
-        while *pos < len && bytes[*pos] != b'>' { *pos += 1; }
-        if *pos < len { *pos += 1; }
+        while *pos < len && bytes[*pos] != b'>' {
+            *pos += 1;
+        }
+        if *pos < len {
+            *pos += 1;
+        }
     }
 
     fn parse_value(bytes: &[u8], pos: &mut usize, len: usize) -> Value {
         skip_ws(bytes, pos, len);
-        if *pos >= len { return Value::Null; }
+        if *pos >= len {
+            return Value::Null;
+        }
 
         if expect(bytes, pos, len, b"<true/>") {
             Value::Bool(true)
@@ -95,8 +111,12 @@ fn parse_plist(xml: &str) -> Value {
             let mut arr = Vec::new();
             loop {
                 skip_ws(bytes, pos, len);
-                if *pos >= len { break; }
-                if expect(bytes, pos, len, b"</array>") { break; }
+                if *pos >= len {
+                    break;
+                }
+                if expect(bytes, pos, len, b"</array>") {
+                    break;
+                }
                 arr.push(parse_value(bytes, pos, len));
             }
             Value::Array(arr)
@@ -104,8 +124,12 @@ fn parse_plist(xml: &str) -> Value {
             let mut map = Map::new();
             loop {
                 skip_ws(bytes, pos, len);
-                if *pos >= len { break; }
-                if expect(bytes, pos, len, b"</dict>") { break; }
+                if *pos >= len {
+                    break;
+                }
+                if expect(bytes, pos, len, b"</dict>") {
+                    break;
+                }
                 if expect(bytes, pos, len, b"<key>") {
                     let key = read_until(bytes, pos, len, b'<');
                     skip_close_tag(bytes, pos, len);
@@ -125,14 +149,23 @@ fn parse_plist(xml: &str) -> Value {
     // Skip XML preamble: <?...?>, <!...>, and <plist ...> before parsing content.
     loop {
         skip_ws(bytes, &mut pos, len);
-        if pos >= len { break; }
+        if pos >= len {
+            break;
+        }
         let skip_tag_prefix = |pos: &usize, len: usize, prefix: &[u8]| -> bool {
             *pos + prefix.len() <= len && &bytes[*pos..*pos + prefix.len()] == prefix
         };
 
-        if skip_tag_prefix(&pos, len, b"<?") || skip_tag_prefix(&pos, len, b"<!") || skip_tag_prefix(&pos, len, b"<plist") {
-            while pos < len && bytes[pos] != b'>' { pos += 1; }
-            if pos < len { pos += 1; }
+        if skip_tag_prefix(&pos, len, b"<?")
+            || skip_tag_prefix(&pos, len, b"<!")
+            || skip_tag_prefix(&pos, len, b"<plist")
+        {
+            while pos < len && bytes[pos] != b'>' {
+                pos += 1;
+            }
+            if pos < len {
+                pos += 1;
+            }
         } else {
             break;
         }

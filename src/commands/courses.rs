@@ -1,33 +1,43 @@
-use anyhow::Result;
-use crate::Cli;
+use super::{level_to_classification, ApiCtx};
 use crate::moodle::course::get_enrolled_courses_api;
 use crate::output::format_and_output;
 use crate::utils::format_moodle_date;
-use super::{ApiCtx, level_to_classification};
+use crate::Cli;
+use anyhow::Result;
 
 pub async fn run(cmd: &crate::CoursesCommands, cli: &Cli) -> Result<()> {
     let ctx = ApiCtx::build(cli)?;
 
     match cmd {
-        crate::CoursesCommands::List { incomplete_only, level } => {
+        crate::CoursesCommands::List {
+            incomplete_only,
+            level,
+        } => {
             let classification = level_to_classification(*level);
-            let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
+            let courses =
+                get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
 
             let filtered: Vec<_> = if *incomplete_only {
-                courses.into_iter().filter(|c| c.progress.unwrap_or(0) < 100).collect()
+                courses
+                    .into_iter()
+                    .filter(|c| c.progress.unwrap_or(0) < 100)
+                    .collect()
             } else {
                 courses
             };
 
-            let items: Vec<serde_json::Value> = filtered.iter()
-                .map(|c| serde_json::json!({
-                    "id": c.id,
-                    "fullname": c.fullname,
-                    "shortname": c.shortname,
-                    "progress": c.progress,
-                    "startdate": format_moodle_date(c.startdate),
-                    "enddate": format_moodle_date(c.enddate),
-                }))
+            let items: Vec<serde_json::Value> = filtered
+                .iter()
+                .map(|c| {
+                    serde_json::json!({
+                        "id": c.id,
+                        "fullname": c.fullname,
+                        "shortname": c.shortname,
+                        "progress": c.progress,
+                        "startdate": format_moodle_date(c.startdate),
+                        "enddate": format_moodle_date(c.enddate),
+                    })
+                })
                 .collect();
 
             format_and_output(&items, ctx.output, None);
@@ -35,7 +45,9 @@ pub async fn run(cmd: &crate::CoursesCommands, cli: &Cli) -> Result<()> {
 
         crate::CoursesCommands::Info { course_id } => {
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, "all").await?;
-            let course = courses.iter().find(|c| c.id == *course_id)
+            let course = courses
+                .iter()
+                .find(|c| c.id == *course_id)
                 .ok_or_else(|| anyhow::anyhow!("Course not found: {}", course_id))?;
 
             let item = serde_json::to_value(course)?;
@@ -44,7 +56,9 @@ pub async fn run(cmd: &crate::CoursesCommands, cli: &Cli) -> Result<()> {
 
         crate::CoursesCommands::Progress { course_id } => {
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, "all").await?;
-            let course = courses.iter().find(|c| c.id == *course_id)
+            let course = courses
+                .iter()
+                .find(|c| c.id == *course_id)
                 .ok_or_else(|| anyhow::anyhow!("Course not found: {}", course_id))?;
 
             let item = serde_json::json!({
@@ -60,7 +74,9 @@ pub async fn run(cmd: &crate::CoursesCommands, cli: &Cli) -> Result<()> {
 
         crate::CoursesCommands::Syllabus { course_id } => {
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, "all").await?;
-            let course = courses.iter().find(|c| c.id == *course_id)
+            let course = courses
+                .iter()
+                .find(|c| c.id == *course_id)
                 .ok_or_else(|| anyhow::anyhow!("Course not found: {}", course_id))?;
 
             let syllabus = fetch_syllabus(&ctx.client, &course.shortname).await;
@@ -80,9 +96,15 @@ pub async fn run(cmd: &crate::CoursesCommands, cli: &Cli) -> Result<()> {
                     }
                 }
                 None => {
-                    ctx.log.warn(&format!("Syllabus not found for course: {}", course.shortname));
+                    ctx.log.warn(&format!(
+                        "Syllabus not found for course: {}",
+                        course.shortname
+                    ));
                     if let serde_json::Value::Object(ref mut map) = result {
-                        map.insert("note".to_string(), serde_json::json!("Syllabus not available from CMAP"));
+                        map.insert(
+                            "note".to_string(),
+                            serde_json::json!("Syllabus not available from CMAP"),
+                        );
                     }
                 }
             }
@@ -154,7 +176,10 @@ async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<ser
             escaped = false;
             continue;
         }
-        if ch == '\\' { escaped = true; continue; }
+        if ch == '\\' {
+            escaped = true;
+            continue;
+        }
         if ch == '"' {
             in_string = !in_string;
             if !in_string && !current.is_empty() {
@@ -162,7 +187,9 @@ async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<ser
             }
             continue;
         }
-        if in_string { current.push(ch); }
+        if in_string {
+            current.push(ch);
+        }
     }
 
     // Extract schedule from string table (week numbers 1-18)
@@ -174,7 +201,9 @@ async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<ser
 
     for i in 0..string_table.len() {
         let s = &string_table[i];
-        if !week_pattern.is_match(s) || processed.contains(&i) { continue; }
+        if !week_pattern.is_match(s) || processed.contains(&i) {
+            continue;
+        }
 
         let week = s.clone();
         let mut date = String::new();
@@ -210,7 +239,8 @@ async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<ser
         }
 
         // Clean title
-        let title = title.trim()
+        let title = title
+            .trim()
             .replace(['\r', '\n'], " ")
             .trim_end_matches(',')
             .trim()
@@ -224,9 +254,15 @@ async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<ser
                 if let Some(last) = schedule.last() {
                     if let Some(last_date) = last.get("date").and_then(|d| d.as_str()) {
                         infer_next_week_date(last_date)
-                    } else { date }
-                } else { date }
-            } else { date };
+                    } else {
+                        date
+                    }
+                } else {
+                    date
+                }
+            } else {
+                date
+            };
 
             schedule.push(serde_json::json!({ "week": week, "date": date, "title": title }));
         }
@@ -249,7 +285,11 @@ async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<ser
 
     // Try to find instructor
     for s in &string_table {
-        if s.contains("教授") || s.contains("老師") || s.contains("教師") || s.contains("Instructor") {
+        if s.contains("教授")
+            || s.contains("老師")
+            || s.contains("教師")
+            || s.contains("Instructor")
+        {
             if let serde_json::Value::Object(ref mut map) = result {
                 map.insert("instructor".to_string(), serde_json::json!(s));
             }
@@ -263,7 +303,9 @@ async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<ser
 fn infer_next_week_date(last_date: &str) -> String {
     use std::str::FromStr;
     let parts: Vec<&str> = last_date.splitn(3, '-').collect();
-    if parts.len() != 3 { return String::new(); }
+    if parts.len() != 3 {
+        return String::new();
+    }
     let (y, m, d) = (
         i32::from_str(parts[0]).unwrap_or(2024),
         u32::from_str(parts[1]).unwrap_or(1),
@@ -273,10 +315,18 @@ fn infer_next_week_date(last_date: &str) -> String {
     let days_in_month = [0u32, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     let leap = y % 4 == 0 && (y % 100 != 0 || y % 400 == 0);
     let feb_days = if leap { 29u32 } else { 28 };
-    let dim = if m == 2 { feb_days } else { days_in_month[m as usize] };
+    let dim = if m == 2 {
+        feb_days
+    } else {
+        days_in_month[m as usize]
+    };
     let (ny, nm, nd) = if d + 7 > dim {
         let nd = d + 7 - dim;
-        if m == 12 { (y + 1, 1, nd) } else { (y, m + 1, nd) }
+        if m == 12 {
+            (y + 1, 1, nd)
+        } else {
+            (y, m + 1, nd)
+        }
     } else {
         (y, m, d + 7)
     };

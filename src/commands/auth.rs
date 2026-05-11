@@ -1,9 +1,10 @@
-use anyhow::Result;
-use crate::Cli;
+use crate::auth;
+use crate::auth::StoredCredentials;
 use crate::config::load_config_for_cli;
 use crate::logger::Logger;
-use crate::auth;
 use crate::output::format_and_output;
+use crate::Cli;
+use anyhow::Result;
 use std::path::Path;
 
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -17,8 +18,12 @@ async fn check_for_update(log: &Logger) {
         .build();
     let Ok(client) = client else { return };
 
-    let Ok(resp) = client.get(NPM_REGISTRY_API).send().await else { return };
-    let Ok(json) = resp.json::<serde_json::Value>().await else { return };
+    let Ok(resp) = client.get(NPM_REGISTRY_API).send().await else {
+        return;
+    };
+    let Ok(json) = resp.json::<serde_json::Value>().await else {
+        return;
+    };
 
     if json.get("error").is_some() {
         log.debug("Update check skipped: package not found on npm registry.");
@@ -40,13 +45,33 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
     let log = Logger::new(cli.verbose, cli.silent);
 
     match cmd {
-        crate::AuthCommands::Login => {
+        crate::AuthCommands::Login { id, password } => {
+            // Handle credential storage for headless login
+            let _creds = match (id, password) {
+                (Some(sid), Some(pwd)) => {
+                    let c = StoredCredentials {
+                        id: sid.clone(),
+                        password: pwd.clone(),
+                    };
+                    c.save(&config.auth_state_path);
+                    log.info(&format!("Credentials saved for {}@o365st.cycu.edu.tw", sid));
+                    Some(c)
+                }
+                (Some(_), None) => {
+                    anyhow::bail!("--id requires --password for headless login.");
+                }
+                (None, Some(_)) => {
+                    anyhow::bail!("--password requires --id.");
+                }
+                (None, None) => None,
+            };
+
             check_for_update(&log).await;
             log.info("Launching browser for login...");
             let (launched, ws_token) = auth::launch_authenticated(&config, &log).await?;
             // Close browser after login
             auth::close_persistent_session(launched).await;
-            
+
             match ws_token {
                 Some(token) => {
                     log.success("Login successful!");
@@ -60,7 +85,9 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
                     format_and_output(&[result], cli.output, None);
                 }
                 None => {
-                    log.warn("Logged in but could not acquire WS token. Some commands may not work.");
+                    log.warn(
+                        "Logged in but could not acquire WS token. Some commands may not work.",
+                    );
                     let result = serde_json::json!({
                         "action": "login",
                         "success": true,
@@ -75,6 +102,7 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
 
         crate::AuthCommands::Status => {
             let (has_session, ws_token) = auth::check_session_status(&config);
+            let credentials_stored = StoredCredentials::load(&config.auth_state_path).is_some();
             let active = has_session || ws_token.is_some();
 
             let session_path = Path::new(&config.auth_state_path);
@@ -95,7 +123,9 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
             let (size, modified) = match stats_source.and_then(|p| std::fs::metadata(p).ok()) {
                 Some(md) => {
                     let size = Some(md.len());
-                    let modified = md.modified().ok()
+                    let modified = md
+                        .modified()
+                        .ok()
                         .map(chrono::DateTime::<chrono::Utc>::from)
                         .map(|dt| dt.to_rfc3339());
                     (size, modified)
@@ -139,6 +169,7 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
                 },
                 "active": active,
                 "ws_token_prefix": ws_token.as_deref().map(|t| &t[..t.len().min(20)]),
+                "credentials_stored": credentials_stored,
                 "hint": if active { None } else { Some("Run 'openape login' first") },
             });
             format_and_output(&[result], cli.output, None);

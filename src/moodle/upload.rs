@@ -16,10 +16,14 @@ pub async fn upload_file_api(
     filename: Option<&str>,
     filepath: Option<&str>,
 ) -> anyhow::Result<u64> {
-    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let ws_token = session
+        .ws_token
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("WS token required"))?;
     let draft_item_id = draft_id.unwrap_or_else(generate_draft_item_id);
     let file_name = filename.unwrap_or_else(|| {
-        std::path::Path::new(file_path).file_name()
+        std::path::Path::new(file_path)
+            .file_name()
             .and_then(|n| n.to_str())
             .unwrap_or("unknown")
     });
@@ -28,8 +32,10 @@ pub async fn upload_file_api(
 
     let form = reqwest::multipart::Form::new()
         .text("token", ws_token.clone())
-        .part("file", reqwest::multipart::Part::bytes(file_bytes)
-            .file_name(file_name.to_string()))
+        .part(
+            "file",
+            reqwest::multipart::Part::bytes(file_bytes).file_name(file_name.to_string()),
+        )
         .text("filepath", filepath.unwrap_or("/").to_string())
         .text("itemid", draft_item_id.to_string())
         .text("contextid", user_context_id.to_string())
@@ -42,7 +48,8 @@ pub async fn upload_file_api(
     let result: serde_json::Value = resp.json().await?;
 
     if result.get("error").is_some() {
-        let msg = result.get("message")
+        let msg = result
+            .get("message")
             .or_else(|| result.get("error"))
             .and_then(|v| v.as_str())
             .unwrap_or("Upload failed");

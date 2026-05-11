@@ -1,13 +1,13 @@
-use anyhow::Result;
-use crate::Cli;
+use super::{in_progress_all_to_classification, ApiCtx};
 use crate::moodle::course::get_enrolled_courses_api;
 use crate::moodle::quiz::{
-    get_quizzes_by_courses_api, start_quiz_attempt_api,
-    get_all_quiz_attempt_data_api, process_quiz_attempt_api,
+    get_all_quiz_attempt_data_api, get_quizzes_by_courses_api, process_quiz_attempt_api,
+    start_quiz_attempt_api,
 };
 use crate::output::format_and_output;
-use crate::utils::{format_moodle_date};
-use super::{ApiCtx, in_progress_all_to_classification};
+use crate::utils::format_moodle_date;
+use crate::Cli;
+use anyhow::Result;
 use std::collections::HashSet;
 
 pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
@@ -15,7 +15,8 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
 
     match cmd {
         crate::QuizzesCommands::List { course_id, all } => {
-            let quizzes = get_quizzes_by_courses_api(&ctx.client, &ctx.session, &[*course_id]).await?;
+            let quizzes =
+                get_quizzes_by_courses_api(&ctx.client, &ctx.session, &[*course_id]).await?;
 
             let filtered: Vec<_> = if *all {
                 quizzes.iter().collect()
@@ -23,18 +24,23 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
                 quizzes.iter().filter(|q| !q.is_complete).collect()
             };
 
-            let items: Vec<serde_json::Value> = filtered.iter().map(|q| serde_json::json!({
-                "quizid": q.quizid,
-                "cmid": q.cmid,
-                "name": q.name,
-                "intro": q.intro,
-                "url": q.url,
-                "is_complete": q.is_complete,
-                "attempts_used": q.attempts_used,
-                "max_attempts": q.max_attempts,
-                "time_open": format_moodle_date(q.time_open),
-                "time_close": format_moodle_date(q.time_close),
-            })).collect();
+            let items: Vec<serde_json::Value> = filtered
+                .iter()
+                .map(|q| {
+                    serde_json::json!({
+                        "quizid": q.quizid,
+                        "cmid": q.cmid,
+                        "name": q.name,
+                        "intro": q.intro,
+                        "url": q.url,
+                        "is_complete": q.is_complete,
+                        "attempts_used": q.attempts_used,
+                        "max_attempts": q.max_attempts,
+                        "time_open": format_moodle_date(q.time_open),
+                        "time_close": format_moodle_date(q.time_close),
+                    })
+                })
+                .collect();
 
             ctx.log.info(&format!("Found {} quizzes", items.len()));
             format_and_output(&items, ctx.output, None);
@@ -42,11 +48,14 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
 
         crate::QuizzesCommands::ListAll { level, all } => {
             let classification = in_progress_all_to_classification(*level);
-            let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
+            let courses =
+                get_enrolled_courses_api(&ctx.client, &ctx.session, classification).await?;
             let course_ids: Vec<u64> = courses.iter().map(|c| c.id).collect();
-            let quizzes = get_quizzes_by_courses_api(&ctx.client, &ctx.session, &course_ids).await?;
+            let quizzes =
+                get_quizzes_by_courses_api(&ctx.client, &ctx.session, &course_ids).await?;
 
-            let course_map: std::collections::HashMap<Option<u64>, &str> = courses.iter()
+            let course_map: std::collections::HashMap<Option<u64>, &str> = courses
+                .iter()
                 .map(|c| (Some(c.id), c.fullname.as_str()))
                 .collect();
 
@@ -56,27 +65,40 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
                 quizzes.iter().filter(|q| !q.is_complete).collect()
             };
 
-            let items: Vec<serde_json::Value> = filtered.iter().map(|q| serde_json::json!({
-                "quizid": q.quizid,
-                "cmid": q.cmid,
-                "course_name": course_map.get(&q.course_id).copied().unwrap_or("Unknown"),
-                "name": q.name,
-                "intro": q.intro,
-                "url": q.url,
-                "is_complete": q.is_complete,
-                "attempts_used": q.attempts_used,
-                "max_attempts": q.max_attempts,
-                "time_close": format_moodle_date(q.time_close),
-            })).collect();
+            let items: Vec<serde_json::Value> = filtered
+                .iter()
+                .map(|q| {
+                    serde_json::json!({
+                        "quizid": q.quizid,
+                        "cmid": q.cmid,
+                        "course_name": course_map.get(&q.course_id).copied().unwrap_or("Unknown"),
+                        "name": q.name,
+                        "intro": q.intro,
+                        "url": q.url,
+                        "is_complete": q.is_complete,
+                        "attempts_used": q.attempts_used,
+                        "max_attempts": q.max_attempts,
+                        "time_close": format_moodle_date(q.time_close),
+                    })
+                })
+                .collect();
 
-            ctx.log.info(&format!("Found {} quizzes across {} courses", items.len(), courses.len()));
+            ctx.log.info(&format!(
+                "Found {} quizzes across {} courses",
+                items.len(),
+                courses.len()
+            ));
             format_and_output(&items, ctx.output, None);
         }
 
         crate::QuizzesCommands::Start { quiz_id, cmid } => {
-            let result = start_quiz_attempt_api(&ctx.client, &ctx.session, *quiz_id, false, *cmid).await?;
+            let result =
+                start_quiz_attempt_api(&ctx.client, &ctx.session, *quiz_id, false, *cmid).await?;
             let attempt = &result.attempt;
-            ctx.log.success(&format!("Quiz attempt started! Attempt ID: {}", attempt.attemptid));
+            ctx.log.success(&format!(
+                "Quiz attempt started! Attempt ID: {}",
+                attempt.attemptid
+            ));
             if let Some(msgs) = &result.messages {
                 for msg in msgs {
                     ctx.log.info(&format!("  Note: {}", msg));
@@ -84,11 +106,12 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             }
 
             // Auto-fetch questions like the TS version
-            match get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, attempt.attemptid, None).await {
+            match get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, attempt.attemptid, None)
+                .await
+            {
                 Ok(data) => {
-                    let questions: Vec<serde_json::Value> = data.questions.values()
-                        .map(format_question_json)
-                        .collect();
+                    let questions: Vec<serde_json::Value> =
+                        data.questions.values().map(format_question_json).collect();
                     let total = questions.len();
 
                     let mut items: Vec<serde_json::Value> = vec![serde_json::json!({
@@ -123,18 +146,26 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             }
         }
 
-        crate::QuizzesCommands::Info { attempt_id, page, cmid } => {
+        crate::QuizzesCommands::Info {
+            attempt_id,
+            page,
+            cmid,
+        } => {
             let data = if *page == -1 {
                 get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, *attempt_id, *cmid).await?
             } else {
                 crate::moodle::quiz::get_quiz_attempt_data_api(
-                    &ctx.client, &ctx.session, *attempt_id, *page, *cmid,
-                ).await?
+                    &ctx.client,
+                    &ctx.session,
+                    *attempt_id,
+                    *page,
+                    *cmid,
+                )
+                .await?
             };
 
-            let mut questions: Vec<serde_json::Value> = data.questions.values()
-                .map(format_question_json)
-                .collect();
+            let mut questions: Vec<serde_json::Value> =
+                data.questions.values().map(format_question_json).collect();
             questions.sort_by_key(|q| q.get("slot").and_then(|v| v.as_u64()).unwrap_or(0));
 
             // First row: attempt metadata, then each question as a separate NDJSON row
@@ -148,25 +179,37 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             })];
             items.extend(questions);
 
-            ctx.log.info(&format!("Attempt {} has {} questions", attempt_id, total));
+            ctx.log
+                .info(&format!("Attempt {} has {} questions", attempt_id, total));
             format_and_output(&items, ctx.output, None);
         }
 
-        crate::QuizzesCommands::Save { attempt_id, answers, cmid } => {
+        crate::QuizzesCommands::Save {
+            attempt_id,
+            answers,
+            cmid,
+        } => {
             // Get attempt data first for unique_id and sequence_checks
-            let data = get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, *attempt_id, *cmid).await?;
-            let unique_id = data.attempt.uniqueid
+            let data = get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, *attempt_id, *cmid)
+                .await?;
+            let unique_id = data
+                .attempt
+                .uniqueid
                 .ok_or_else(|| anyhow::anyhow!("Could not get attempt unique ID"))?;
 
             // Parse answers from either JSON or escaped delimiter format.
             let parsed_answers = parse_answers_input(answers)?;
 
-            let sequence_checks: std::collections::HashMap<u32, u64> = data.questions.iter()
+            let sequence_checks: std::collections::HashMap<u32, u64> = data
+                .questions
+                .iter()
                 .filter_map(|(&slot, q)| q.sequencecheck.map(|sc| (slot, sc)))
                 .collect();
 
             // Detect checkbox-style multichoice questions from HTML so only those use choiceN submission.
-            let checkbox_slots: HashSet<u32> = data.questions.iter()
+            let checkbox_slots: HashSet<u32> = data
+                .questions
+                .iter()
                 .filter_map(|(&slot, q)| {
                     let html = q.html.as_deref().unwrap_or("");
                     if html.contains("type=\"checkbox\"") || html.contains("type='checkbox'") {
@@ -178,12 +221,17 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
                 .collect();
 
             let state = process_quiz_attempt_api(
-                &ctx.client, &ctx.session,
-                *attempt_id, unique_id,
-                &parsed_answers, &sequence_checks,
+                &ctx.client,
+                &ctx.session,
+                *attempt_id,
+                unique_id,
+                &parsed_answers,
+                &sequence_checks,
                 &checkbox_slots,
-                false, *cmid,
-            ).await?;
+                false,
+                *cmid,
+            )
+            .await?;
 
             ctx.log.success(&format!("Answers saved. State: {}", state));
             let result = serde_json::json!({
@@ -197,15 +245,22 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
 
         crate::QuizzesCommands::Submit { attempt_id, cmid } => {
             // Submit the attempt as-is, reusing answers already saved on Moodle.
-            let data = get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, *attempt_id, *cmid).await?;
-            let unique_id = data.attempt.uniqueid
+            let data = get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, *attempt_id, *cmid)
+                .await?;
+            let unique_id = data
+                .attempt
+                .uniqueid
                 .ok_or_else(|| anyhow::anyhow!("Could not get attempt unique ID"))?;
 
-            let sequence_checks: std::collections::HashMap<u32, u64> = data.questions.iter()
+            let sequence_checks: std::collections::HashMap<u32, u64> = data
+                .questions
+                .iter()
                 .filter_map(|(&slot, q)| q.sequencecheck.map(|sc| (slot, sc)))
                 .collect();
 
-            let checkbox_slots: HashSet<u32> = data.questions.iter()
+            let checkbox_slots: HashSet<u32> = data
+                .questions
+                .iter()
                 .filter_map(|(&slot, q)| {
                     let html = q.html.as_deref().unwrap_or("");
                     if html.contains("type=\"checkbox\"") || html.contains("type='checkbox'") {
@@ -218,14 +273,20 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
 
             let parsed_answers: Vec<(u32, String)> = Vec::new();
             let state = process_quiz_attempt_api(
-                &ctx.client, &ctx.session,
-                *attempt_id, unique_id,
-                &parsed_answers, &sequence_checks,
+                &ctx.client,
+                &ctx.session,
+                *attempt_id,
+                unique_id,
+                &parsed_answers,
+                &sequence_checks,
                 &checkbox_slots,
-                true, *cmid,
-            ).await?;
+                true,
+                *cmid,
+            )
+            .await?;
 
-            ctx.log.success(&format!("Quiz submitted! State: {}", state));
+            ctx.log
+                .success(&format!("Quiz submitted! State: {}", state));
             let result = serde_json::json!({
                 "action": "submit",
                 "attempt_id": *attempt_id,
@@ -252,7 +313,6 @@ fn format_question_json(q: &crate::moodle::types::QuizQuestion) -> serde_json::V
     })
 }
 
-
 /// Convert single-letter choice answers (a-z, A-Z) to 0-based Moodle indices.
 /// Passes through numeric strings, multi-char strings, and comma-separated lists unchanged.
 fn maybe_convert_choice_index(s: &str) -> String {
@@ -275,7 +335,10 @@ fn maybe_convert_choice_index(s: &str) -> String {
     if s.len() == 1 {
         convert_one(s).to_string()
     } else if s.contains(',') {
-        s.split(',').map(|p| convert_one(p.trim())).collect::<Vec<_>>().join(",")
+        s.split(',')
+            .map(|p| convert_one(p.trim()))
+            .collect::<Vec<_>>()
+            .join(",")
     } else {
         s.to_string()
     }
@@ -309,11 +372,12 @@ fn parse_answers_json(raw: &str) -> anyhow::Result<Vec<(u32, String)>> {
         answer: serde_json::Value,
     }
 
-    let parsed: Vec<JsonAnswer> = serde_json::from_str(raw)
-        .map_err(|e| anyhow::anyhow!(
+    let parsed: Vec<JsonAnswer> = serde_json::from_str(raw).map_err(|e| {
+        anyhow::anyhow!(
             "Invalid answers JSON. Expected an array of slot/answer objects, error: {}",
             e
-        ))?;
+        )
+    })?;
 
     if parsed.is_empty() {
         anyhow::bail!("Answers JSON is empty");
@@ -410,12 +474,13 @@ fn parse_answers_delimited(raw: &str) -> anyhow::Result<Vec<(u32, String)>> {
             continue;
         }
 
-        let (slot_part, answer_part) = split_once_unescaped(seg, ':')?
-            .ok_or_else(|| anyhow::anyhow!(
+        let (slot_part, answer_part) = split_once_unescaped(seg, ':')?.ok_or_else(|| {
+            anyhow::anyhow!(
                 "Invalid answer segment #{}: '{}' (expected slot:answer)",
                 idx + 1,
                 seg
-            ))?;
+            )
+        })?;
 
         let slot: u32 = slot_part.trim().parse().map_err(|_| {
             anyhow::anyhow!("Invalid slot in segment #{}: '{}'", idx + 1, slot_part)

@@ -39,7 +39,11 @@ pub enum InProgressAllLevel {
 }
 
 #[derive(Parser)]
-#[command(name = "openape", version, about = "CLI tool for CYCU i-Learning platform")]
+#[command(
+    name = "openape",
+    version,
+    about = "CLI tool for CYCU i-Learning platform"
+)]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -66,7 +70,14 @@ struct Cli {
 #[derive(Subcommand)]
 enum Commands {
     /// Login to iLearning manually and save session
-    Login,
+    Login {
+        /// Student ID for headless login (e.g. 11144238)
+        #[arg(long)]
+        id: Option<String>,
+        /// Password (prompted if --id provided without --password)
+        #[arg(long)]
+        password: Option<String>,
+    },
     /// Check session status
     Status,
     /// Remove saved session
@@ -101,8 +112,15 @@ enum Commands {
 
 #[derive(Subcommand)]
 pub enum AuthCommands {
-    /// Login to iLearning manually and save session
-    Login,
+    /// Login to iLearning and save session
+    Login {
+        /// Student ID for headless login (e.g. 11144238)
+        #[arg(long)]
+        id: Option<String>,
+        /// Password (prompted if --id provided without --password)
+        #[arg(long)]
+        password: Option<String>,
+    },
     /// Check session status
     Status,
     /// Remove saved session
@@ -121,17 +139,11 @@ pub enum CoursesCommands {
         level: CourseLevel,
     },
     /// Show detailed course information
-    Info {
-        course_id: u64,
-    },
+    Info { course_id: u64 },
     /// Show course progress
-    Progress {
-        course_id: u64,
-    },
+    Progress { course_id: u64 },
     /// Show course syllabus (from CMAP)
-    Syllabus {
-        course_id: u64,
-    },
+    Syllabus { course_id: u64 },
 }
 
 // ── Videos ────────────────────────────────────────────────────────────────
@@ -231,9 +243,7 @@ pub enum QuizzesCommands {
 #[derive(Subcommand)]
 pub enum MaterialsCommands {
     /// List materials in a specific course
-    List {
-        course_id: u64,
-    },
+    List { course_id: u64 },
     /// List all materials across all courses
     ListAll {
         #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]
@@ -274,9 +284,7 @@ pub enum GradesCommands {
     /// Show grade summary across all courses
     Summary,
     /// Show detailed grades for a specific course
-    Course {
-        course_id: u64,
-    },
+    Course { course_id: u64 },
 }
 
 // ── Forums ────────────────────────────────────────────────────────────────
@@ -291,13 +299,9 @@ pub enum ForumsCommands {
         level: InProgressAllLevel,
     },
     /// List discussions in a forum
-    Discussions {
-        forum_id: u64,
-    },
+    Discussions { forum_id: u64 },
     /// Show posts in a discussion
-    Posts {
-        discussion_id: u64,
-    },
+    Posts { discussion_id: u64 },
     /// Post a new discussion to a forum
     Post {
         forum_id: u64,
@@ -319,9 +323,7 @@ pub enum ForumsCommands {
         inline_attachment_id: Option<u64>,
     },
     /// Delete a forum post or discussion
-    Delete {
-        post_id: u64,
-    },
+    Delete { post_id: u64 },
 }
 
 // ── Announcements ─────────────────────────────────────────────────────────
@@ -336,9 +338,7 @@ pub enum AnnouncementsCommands {
         limit: u32,
     },
     /// Read a specific announcement
-    Read {
-        announcement_id: u64,
-    },
+    Read { announcement_id: u64 },
 }
 
 // ── Calendar ──────────────────────────────────────────────────────────────
@@ -368,18 +368,14 @@ pub enum CalendarCommands {
 #[derive(Subcommand)]
 pub enum AssignmentsCommands {
     /// List assignments in a course
-    List {
-        course_id: u64,
-    },
+    List { course_id: u64 },
     /// List all assignments across all courses
     ListAll {
         #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]
         level: InProgressAllLevel,
     },
     /// Check assignment submission status
-    Status {
-        assignment_id: u64,
-    },
+    Status { assignment_id: u64 },
     /// Submit an assignment (online text or file)
     Submit {
         assignment_id: u64,
@@ -409,18 +405,14 @@ pub enum UploadCommands {
 #[derive(Subcommand)]
 pub enum PagesCommands {
     /// List pages in a course
-    List {
-        course_id: u64,
-    },
+    List { course_id: u64 },
     /// List all pages across all courses
     ListAll {
         #[arg(long, value_enum, default_value_t = InProgressAllLevel::default())]
         level: InProgressAllLevel,
     },
     /// Show the content of a specific page
-    Show {
-        cmid: u64,
-    },
+    Show { cmid: u64 },
 }
 
 // ── Skills ────────────────────────────────────────────────────────────────
@@ -459,7 +451,19 @@ fn main() {
 
 async fn run_command(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        Commands::Login => commands::auth::run(&AuthCommands::Login, &cli).await,
+        Commands::Login {
+            ref id,
+            ref password,
+        } => {
+            commands::auth::run(
+                &AuthCommands::Login {
+                    id: id.clone(),
+                    password: password.clone(),
+                },
+                &cli,
+            )
+            .await
+        }
         Commands::Status => commands::auth::run(&AuthCommands::Status, &cli).await,
         Commands::Logout => commands::auth::run(&AuthCommands::Logout, &cli).await,
         Commands::Courses(ref cmd) => commands::courses::run(cmd, &cli).await,

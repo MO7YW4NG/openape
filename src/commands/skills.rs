@@ -13,18 +13,27 @@ struct Platform {
 fn platforms() -> Vec<(&'static str, Platform)> {
     let home = dirs::home_dir().unwrap_or_default();
     vec![
-        ("claude", Platform {
-            name: "Claude Code",
-            path: home.join(".claude").join("skills"),
-        }),
-        ("codex", Platform {
-            name: "Codex CLI",
-            path: home.join(".codex").join("skills"),
-        }),
-        ("opencode", Platform {
-            name: "OpenCode",
-            path: home.join(".opencode").join("skills"),
-        }),
+        (
+            "claude",
+            Platform {
+                name: "Claude Code",
+                path: home.join(".claude").join("skills"),
+            },
+        ),
+        (
+            "codex",
+            Platform {
+                name: "Codex CLI",
+                path: home.join(".codex").join("skills"),
+            },
+        ),
+        (
+            "opencode",
+            Platform {
+                name: "OpenCode",
+                path: home.join(".opencode").join("skills"),
+            },
+        ),
     ]
 }
 
@@ -32,11 +41,18 @@ fn platforms() -> Vec<(&'static str, Platform)> {
 async fn read_skill_content() -> Result<String> {
     let candidates = [
         // CWD (dev mode / project root)
-        std::env::current_dir().unwrap_or_default().join("skills").join(SKILL_NAME).join("SKILL.md"),
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join("skills")
+            .join(SKILL_NAME)
+            .join("SKILL.md"),
         // Next to the executable (npm installed binary)
         std::env::current_exe()
             .ok()
-            .and_then(|exe| exe.parent().map(|p| p.join("skills").join(SKILL_NAME).join("SKILL.md")))
+            .and_then(|exe| {
+                exe.parent()
+                    .map(|p| p.join("skills").join(SKILL_NAME).join("SKILL.md"))
+            })
             .unwrap_or_default(),
     ];
 
@@ -61,7 +77,9 @@ async fn read_skill_content() -> Result<String> {
         anyhow::bail!("Failed to fetch skill from GitHub: {}", resp.status());
     }
 
-    resp.text().await.with_context(|| "Failed to read response body")
+    resp.text()
+        .await
+        .with_context(|| "Failed to read response body")
 }
 
 pub async fn run(cmd: &crate::SkillsCommands, cli: &crate::Cli) -> Result<()> {
@@ -90,17 +108,23 @@ pub async fn run(cmd: &crate::SkillsCommands, cli: &crate::Cli) -> Result<()> {
                 }
             } else if let Some(ref p) = platform {
                 let key = p.to_lowercase();
-                let found = platforms().into_iter()
+                let found = platforms()
+                    .into_iter()
                     .find(|(k, _)| *k == key.as_str())
                     .map(|(_, plat)| plat);
                 match found {
                     Some(plat) => targets.push(plat),
                     None => {
-                        anyhow::bail!("Unknown platform: {}. Supported: claude, codex, opencode", p);
+                        anyhow::bail!(
+                            "Unknown platform: {}. Supported: claude, codex, opencode",
+                            p
+                        );
                     }
                 }
             } else {
-                anyhow::bail!("Specify a platform or use --all. Example: openape skills install claude");
+                anyhow::bail!(
+                    "Specify a platform or use --all. Example: openape skills install claude"
+                );
             }
 
             eprintln!("Fetching {} skill...", SKILL_NAME);
@@ -108,9 +132,11 @@ pub async fn run(cmd: &crate::SkillsCommands, cli: &crate::Cli) -> Result<()> {
 
             for plat in &targets {
                 let dest_dir = plat.path.join(SKILL_NAME);
-                tokio::fs::create_dir_all(&dest_dir).await
+                tokio::fs::create_dir_all(&dest_dir)
+                    .await
                     .with_context(|| format!("Failed to create {}", dest_dir.display()))?;
-                tokio::fs::write(dest_dir.join("SKILL.md"), &content).await
+                tokio::fs::write(dest_dir.join("SKILL.md"), &content)
+                    .await
                     .with_context(|| format!("Failed to write to {}", dest_dir.display()))?;
                 eprintln!("  {} installed to {}", SKILL_NAME, plat.name);
             }

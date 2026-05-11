@@ -29,7 +29,10 @@ impl SessionMeta {
         if let Some(parent) = Path::new(&meta_path).parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let _ = std::fs::write(&meta_path, serde_json::to_string_pretty(self).unwrap_or_default());
+        let _ = std::fs::write(
+            &meta_path,
+            serde_json::to_string_pretty(self).unwrap_or_default(),
+        );
     }
 
     pub(crate) fn meta_path(auth_state_path: &str) -> String {
@@ -64,8 +67,6 @@ impl SessionMeta {
     pub fn set_user_agent(&mut self, ua: &str) {
         self.user_agent = Some(ua.to_string());
     }
-
-
 }
 
 /// Extract and decode the WS token from a moodlemobile:// URL.
@@ -75,7 +76,9 @@ pub fn extract_token_from_custom_scheme(url: &str) -> Option<String> {
     let re = regex::Regex::new(r"token=([A-Za-z0-9+/=]+)").ok()?;
     let caps = re.captures(url)?;
     use base64::Engine;
-    let decoded = base64::engine::general_purpose::STANDARD.decode(&caps[1]).ok()?;
+    let decoded = base64::engine::general_purpose::STANDARD
+        .decode(&caps[1])
+        .ok()?;
     let decoded_str = String::from_utf8(decoded).ok()?;
     let parts: Vec<&str> = decoded_str.split(":::").collect();
     parts.get(1).map(|s| s.to_string())

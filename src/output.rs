@@ -1,5 +1,5 @@
-use comfy_table::{Table, ContentArrangement, presets::NOTHING};
 use crate::OutputFormat;
+use comfy_table::{presets::NOTHING, ContentArrangement, Table};
 
 /// Format and output data in the specified format.
 pub fn format_and_output(
@@ -85,7 +85,7 @@ pub fn format_as_table(data: &[serde_json::Value]) -> String {
     table
         .load_preset(NOTHING)
         .set_content_arrangement(ContentArrangement::Dynamic)
-        .set_width(140) 
+        .set_width(140)
         .set_header(all_fields.iter().map(|f| f.to_uppercase()));
 
     for item in data {

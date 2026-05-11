@@ -16,7 +16,12 @@ metadata:
 >
 > ```bash
 > npm install -g @mo7yw4ng/openape
+>
+> # Manually Login
 > openape login
+> 
+> # Or use flags (not recommended for security reasons)
+> openape login --id <student-id> --password <password>
 > ```
 
 ```bash

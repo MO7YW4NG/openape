@@ -1,17 +1,21 @@
-use anyhow::Result;
-use crate::Cli;
-use crate::moodle::course::get_enrolled_courses_api;
+use super::ApiCtx;
 use crate::moodle::calendar::get_calendar_events_api;
+use crate::moodle::course::get_enrolled_courses_api;
 use crate::output::format_and_output;
 use crate::utils::format_moodle_date;
+use crate::Cli;
+use anyhow::Result;
 use std::fs;
-use super::ApiCtx;
 
 pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
     let ctx = ApiCtx::build(cli)?;
 
     match cmd {
-        crate::CalendarCommands::Events { upcoming, days, course } => {
+        crate::CalendarCommands::Events {
+            upcoming,
+            days,
+            course,
+        } => {
             let now = chrono::Utc::now().timestamp();
             let end_time = now + (*days as i64 * 86400);
 
@@ -21,18 +25,33 @@ pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
 
             if let Some(course_id) = course {
                 let events = get_calendar_events_api(
-                    &ctx.client, &ctx.session,
-                    Some(*course_id), Some(now), Some(end_time),
-                ).await?;
-                all_events.extend(events.into_iter().filter(|e| e.courseid == Some(*course_id)));
+                    &ctx.client,
+                    &ctx.session,
+                    Some(*course_id),
+                    Some(now),
+                    Some(end_time),
+                )
+                .await?;
+                all_events.extend(
+                    events
+                        .into_iter()
+                        .filter(|e| e.courseid == Some(*course_id)),
+                );
             } else {
                 for c in &courses {
                     match get_calendar_events_api(
-                        &ctx.client, &ctx.session,
-                        Some(c.id), Some(now), Some(end_time),
-                    ).await {
+                        &ctx.client,
+                        &ctx.session,
+                        Some(c.id),
+                        Some(now),
+                        Some(end_time),
+                    )
+                    .await
+                    {
                         Ok(events) => all_events.extend(events),
-                        Err(e) => ctx.log.warn(&format!("Failed to get events for course {}: {}", c.id, e)),
+                        Err(e) => ctx
+                            .log
+                            .warn(&format!("Failed to get events for course {}: {}", c.id, e)),
                     }
                 }
             }
@@ -59,7 +78,8 @@ pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
             let upcoming_count = all_events.iter().filter(|e| e.timestart > now).count();
             ctx.log.info(&format!(
                 "Total: {} events, {} upcoming",
-                all_events.len(), upcoming_count
+                all_events.len(),
+                upcoming_count
             ));
 
             format_and_output(&items, ctx.output, None);
@@ -74,11 +94,18 @@ pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
 
             for c in &courses {
                 match get_calendar_events_api(
-                    &ctx.client, &ctx.session,
-                    Some(c.id), Some(now), Some(end_time),
-                ).await {
+                    &ctx.client,
+                    &ctx.session,
+                    Some(c.id),
+                    Some(now),
+                    Some(end_time),
+                )
+                .await
+                {
                     Ok(events) => all_events.extend(events),
-                    Err(e) => ctx.log.warn(&format!("Failed to get events for course {}: {}", c.id, e)),
+                    Err(e) => ctx
+                        .log
+                        .warn(&format!("Failed to get events for course {}: {}", c.id, e)),
                 }
             }
 
@@ -86,7 +113,8 @@ pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
 
             let mut by_type = serde_json::Map::new();
             for event in &all_events {
-                let count = by_type.entry(event.eventtype.clone())
+                let count = by_type
+                    .entry(event.eventtype.clone())
                     .or_insert(serde_json::json!(0));
                 *count = serde_json::json!(count.as_u64().unwrap_or(0) + 1);
             }
@@ -123,7 +151,11 @@ pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
                 fs::create_dir_all(parent)?;
             }
             fs::write(output, &json_str)?;
-            ctx.log.success(&format!("Exported {} events to {}", all_events.len(), output.display()));
+            ctx.log.success(&format!(
+                "Exported {} events to {}",
+                all_events.len(),
+                output.display()
+            ));
         }
     }
 

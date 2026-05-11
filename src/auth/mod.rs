@@ -1,10 +1,17 @@
 //! Authentication system: login, session management, token acquisition.
 
 pub mod browser;
+pub mod credentials;
+mod microsoft;
 mod token;
 
-pub use browser::{Cookie, cookies_to_cookie_header, find_browser_paths, get_cookies, launch_browser, close_browser, set_cookies, LaunchedBrowser};
 use browser::get_user_data_dir;
+pub use browser::{
+    close_browser, cookies_to_cookie_header, find_browser_paths, get_cookies, launch_browser,
+    set_cookies, Cookie, LaunchedBrowser,
+};
+pub use credentials::StoredCredentials;
+use microsoft::perform_headless_login;
 use token::{extract_token_from_custom_scheme, SessionMeta};
 
 use std::path::Path;
@@ -15,7 +22,10 @@ use crate::moodle::types::SessionInfo;
 use chromiumoxide::Page;
 
 /// Launch browser, restore/create session, acquire WS token.
-pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::Result<(LaunchedBrowser, Option<String>)> {
+pub async fn launch_authenticated(
+    config: &AppConfig,
+    log: &Logger,
+) -> anyhow::Result<(LaunchedBrowser, Option<String>)> {
     let browser_candidates = find_browser_paths();
     if browser_candidates.is_empty() {
         anyhow::bail!("No browser found (Edge/Chrome/Brave). Please install one.");
@@ -23,17 +33,20 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
 
     let cookies_path = get_cookies_path(&config.auth_state_path);
     let has_cookies = cookies_path.exists();
-    
+
     // Load saved session metadata
     let mut meta = SessionMeta::load(&config.auth_state_path);
-    let mut ws_token = meta.get_ws_token();
+    let ws_token = meta.get_ws_token();
     if ws_token.is_some() {
         log.info("Loaded saved Web Service Token.");
     }
 
     // Always use clean profile + cookies (simplest and most reliable).
     // Try headless first on all platforms, fall back to headed if needed.
-    log.info(&format!("Found {} browser candidate(s)", browser_candidates.len()));
+    log.info(&format!(
+        "Found {} browser candidate(s)",
+        browser_candidates.len()
+    ));
     let mut launched_opt: Option<LaunchedBrowser> = None;
     let mut last_err: Option<anyhow::Error> = None;
 
@@ -62,7 +75,10 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
     }
     let launched = match launched_opt {
         Some(l) => l,
-        None => return Err(last_err.unwrap_or_else(|| anyhow::anyhow!("Failed to launch any browser candidate"))),
+        None => {
+            return Err(last_err
+                .unwrap_or_else(|| anyhow::anyhow!("Failed to launch any browser candidate")))
+        }
     };
 
     // Restore cookies to clean profile (navigate first, then set cookies, then reload)
@@ -82,33 +98,34 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
     let session_valid = check_session_valid(&launched.page, &config.moodle_base_url).await;
 
     if session_valid {
-        // Capture and save browser user-agent
-        if meta.user_agent.is_none() {
-            if let Some(ua) = get_browser_user_agent(&launched.page).await {
-                meta.set_user_agent(&ua);
-                meta.save(&config.auth_state_path);
-            }
-        }
-
-        // Try to acquire WS token if we don't have one
-        if ws_token.is_none() {
-            match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
-                Ok(token) => {
-                    meta.set_ws_token(&token);
-                    ws_token = Some(token.clone());
-                    save_user_id(&mut meta, &token, &config.moodle_base_url, log).await;
-                    meta.save(&config.auth_state_path);
-                }
-                Err(e) => {
-                    log.warn(&format!("Failed to acquire WS Token: {}", e));
-                }
-            }
-        }
+        let ws_token = finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
         log.success("Session restored successfully.");
         return Ok((launched, ws_token));
     }
 
     // Session invalid - need to login
+    // Try headless auto-login if credentials are stored
+    let creds = StoredCredentials::load(&config.auth_state_path);
+    if let Some(ref c) = creds {
+        log.info(&format!(
+            "Stored credentials found. Attempting headless login for {}...",
+            c.email()
+        ));
+        match perform_headless_login(&launched.page, &config.moodle_base_url, c, log).await {
+            Ok(()) => {
+                log.success("Headless login succeeded.");
+                let ws_token =
+                    finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
+                return Ok((launched, ws_token));
+            }
+            Err(e) => {
+                close_browser(launched).await;
+                anyhow::bail!("Headless login failed: {}", e);
+            }
+        }
+    }
+
+    // No stored credentials - interactive login fallback
     // If headless, close and relaunch headed
     if config.headless {
         close_browser(launched).await;
@@ -128,50 +145,57 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
             None => anyhow::bail!("Failed to relaunch browser in headed mode."),
         };
         perform_login(&launched.page, &config.moodle_base_url, log).await?;
-
-        // Capture and save browser user-agent
-        if let Some(ua) = get_browser_user_agent(&launched.page).await {
-            meta.set_user_agent(&ua);
-        }
-
-        // Acquire WS token
-        if ws_token.is_none() {
-            match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
-                Ok(token) => {
-                    meta.set_ws_token(&token);
-                    ws_token = Some(token.clone());
-                    save_user_id(&mut meta, &token, &config.moodle_base_url, log).await;
-                    meta.save(&config.auth_state_path);
-                }
-                Err(e) => {
-                    log.warn(&format!("Failed to acquire WS Token: {}", e));
-                }
-            }
-        }
-
-        // Save cookies
-        if let Ok(cookies) = get_cookies(&launched.page).await {
-            save_cookies(&config.auth_state_path, &cookies);
-        }
+        let ws_token = finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
 
         return Ok((launched, ws_token));
     }
 
     // Already headed, just login
     perform_login(&launched.page, &config.moodle_base_url, log).await?;
+    let ws_token = finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
 
+    Ok((launched, ws_token))
+}
+
+/// Create API-only context (no browser) using saved WS token.
+pub fn create_api_context(config: &AppConfig, log: &Logger) -> anyhow::Result<SessionInfo> {
+    let meta = SessionMeta::load(&config.auth_state_path);
+    let ws_token = meta
+        .get_ws_token()
+        .ok_or_else(|| anyhow::anyhow!("No WS token found. Run `openape login` first."))?;
+
+    log.debug("Using cached Web Service Token.");
+    Ok(SessionInfo {
+        moodle_base_url: config.moodle_base_url.clone(),
+        ws_token: Some(ws_token),
+        user_agent: meta.user_agent.clone(),
+        user_id: meta.user_id.unwrap_or(0),
+    })
+}
+
+/// Finalize a login session: capture user-agent, acquire WS token, save user ID and cookies.
+async fn finalize_session(
+    page: &Page,
+    meta: &mut SessionMeta,
+    config: &AppConfig,
+    log: &Logger,
+    existing_ws_token: Option<String>,
+) -> anyhow::Result<Option<String>> {
     // Capture and save browser user-agent
-    if let Some(ua) = get_browser_user_agent(&launched.page).await {
-        meta.set_user_agent(&ua);
+    if meta.user_agent.is_none() {
+        if let Some(ua) = get_browser_user_agent(page).await {
+            meta.set_user_agent(&ua);
+        }
     }
 
-    // Acquire WS token
+    // Acquire WS token if we don't have one
+    let mut ws_token = existing_ws_token.or_else(|| meta.get_ws_token());
     if ws_token.is_none() {
-        match acquire_ws_token(&launched.page, &config.moodle_base_url, log).await {
+        match acquire_ws_token(page, &config.moodle_base_url, log).await {
             Ok(token) => {
                 meta.set_ws_token(&token);
                 ws_token = Some(token.clone());
-                save_user_id(&mut meta, &token, &config.moodle_base_url, log).await;
+                save_user_id(meta, &token, &config.moodle_base_url, log).await;
                 meta.save(&config.auth_state_path);
             }
             Err(e) => {
@@ -181,27 +205,11 @@ pub async fn launch_authenticated(config: &AppConfig, log: &Logger) -> anyhow::R
     }
 
     // Save cookies
-    if let Ok(cookies) = get_cookies(&launched.page).await {
+    if let Ok(cookies) = get_cookies(page).await {
         save_cookies(&config.auth_state_path, &cookies);
     }
 
-    Ok((launched, ws_token))
-}
-
-/// Create API-only context (no browser) using saved WS token.
-pub fn create_api_context(config: &AppConfig, log: &Logger) -> anyhow::Result<SessionInfo> {
-    let meta = SessionMeta::load(&config.auth_state_path);
-    let ws_token = meta.get_ws_token().ok_or_else(|| {
-        anyhow::anyhow!("No WS token found. Run `openape login` first.")
-    })?;
-
-    log.debug("Using cached Web Service Token.");
-    Ok(SessionInfo {
-        moodle_base_url: config.moodle_base_url.clone(),
-        ws_token: Some(ws_token),
-        user_agent: meta.user_agent.clone(),
-        user_id: meta.user_id.unwrap_or(0),
-    })
+    Ok(ws_token)
 }
 
 /// Check if session is valid by navigating to dashboard.
@@ -274,8 +282,6 @@ async fn acquire_ws_token(page: &Page, base_url: &str, log: &Logger) -> anyhow::
         base_url, passport
     );
 
-    log.debug(&format!("Token acquisition URL: {}", launch_url));
-
     // More reliable than CDP event interception:
     // use current browser cookies and perform a direct HTTP request without following redirects.
     let cookies = get_cookies(page).await?;
@@ -296,7 +302,11 @@ async fn acquire_ws_token(page: &Page, base_url: &str, log: &Logger) -> anyhow::
         .await
         .map_err(|e| anyhow::anyhow!("Token request failed: {}", e))?;
 
-    if let Some(loc) = resp.headers().get(reqwest::header::LOCATION).and_then(|v| v.to_str().ok()) {
+    if let Some(loc) = resp
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+    {
         if loc.starts_with("moodlemobile://") {
             if let Some(token) = extract_token_from_custom_scheme(loc) {
                 log.success("Web Service Token acquired successfully.");
@@ -306,12 +316,17 @@ async fn acquire_ws_token(page: &Page, base_url: &str, log: &Logger) -> anyhow::
         anyhow::bail!("Unexpected redirect location: {}", loc);
     }
 
-    anyhow::bail!("Token acquisition failed: no Location header received (status {}).", resp.status())
+    anyhow::bail!(
+        "Token acquisition failed: no Location header received (status {}).",
+        resp.status()
+    )
 }
 
 /// Fetch and save user ID from Moodle site info API.
-async fn save_user_id(meta: &mut SessionMeta, ws_token: &str, base_url: &str, log: &Logger) {
-    if meta.user_id.is_some() { return; }
+async fn save_user_id(meta: &mut SessionMeta, ws_token: &str, base_url: &str, _log: &Logger) {
+    if meta.user_id.is_some() {
+        return;
+    }
     let url = format!(
         "{}/webservice/rest/server.php?wstoken={}&wsfunction=core_webservice_get_site_info&moodlewsrestformat=json",
         base_url, ws_token
@@ -320,7 +335,6 @@ async fn save_user_id(meta: &mut SessionMeta, ws_token: &str, base_url: &str, lo
         if let Ok(json) = resp.json::<serde_json::Value>().await {
             if let Some(id) = json.get("userid").and_then(|v| v.as_u64()) {
                 meta.set_user_id(id);
-                log.debug(&format!("Saved user ID: {}", id));
             }
         }
     }
@@ -349,6 +363,8 @@ pub fn logout(config: &AppConfig) {
     if meta_path.exists() {
         let _ = std::fs::remove_file(meta_path);
     }
+    // Remove stored credentials
+    StoredCredentials::delete(&config.auth_state_path);
     // Clean up old browser data dir if exists
     let user_data_dir = get_user_data_dir(&config.auth_state_path);
     if user_data_dir.exists() {
@@ -357,7 +373,11 @@ pub fn logout(config: &AppConfig) {
 }
 
 /// Launch a browser session using saved cookies (clean profile).
-pub async fn launch_persistent_session(config: &AppConfig, log: &Logger, headless_only: bool) -> anyhow::Result<LaunchedBrowser> {
+pub async fn launch_persistent_session(
+    config: &AppConfig,
+    log: &Logger,
+    headless_only: bool,
+) -> anyhow::Result<LaunchedBrowser> {
     let cookies_path = get_cookies_path(&config.auth_state_path);
 
     if !cookies_path.exists() {
@@ -395,7 +415,10 @@ pub async fn launch_persistent_session(config: &AppConfig, log: &Logger, headles
             let _ = launched.page.goto(&config.moodle_base_url).await;
             let _ = launched.page.wait_for_navigation().await;
             if let Err(e) = set_cookies(&launched.page, &cookies).await {
-                log.warn(&format!("{} mode: failed to set cookies: {}", mode_label, e));
+                log.warn(&format!(
+                    "{} mode: failed to set cookies: {}",
+                    mode_label, e
+                ));
                 close_browser(launched).await;
                 continue;
             }
@@ -409,7 +432,10 @@ pub async fn launch_persistent_session(config: &AppConfig, log: &Logger, headles
         let check_url = format!("{}/my/", config.moodle_base_url);
         if launched.page.goto(&check_url).await.is_err() {
             close_browser(launched).await;
-            log.warn(&format!("{} mode: navigation failed, trying next mode...", mode_label));
+            log.warn(&format!(
+                "{} mode: navigation failed, trying next mode...",
+                mode_label
+            ));
             continue;
         }
 
@@ -424,7 +450,10 @@ pub async fn launch_persistent_session(config: &AppConfig, log: &Logger, headles
 
         if !valid {
             close_browser(launched).await;
-            log.warn(&format!("{} mode: session invalid, trying next mode...", mode_label));
+            log.warn(&format!(
+                "{} mode: session invalid, trying next mode...",
+                mode_label
+            ));
             continue;
         }
 
@@ -432,7 +461,39 @@ pub async fn launch_persistent_session(config: &AppConfig, log: &Logger, headles
         return Ok(launched);
     }
 
-    anyhow::bail!("Browser session expired. Run `openape login` to re-authenticate.")
+    // All session-restore attempts failed — try headless re-login if credentials exist
+    let creds = StoredCredentials::load(&config.auth_state_path);
+    if let Some(ref c) = creds {
+        log.info(&format!(
+            "Session expired. Attempting headless re-login for {}...",
+            c.email()
+        ));
+        for exe_path in &browser_candidates {
+            if let Ok(launched) = launch_browser(exe_path, true, None).await {
+                match perform_headless_login(&launched.page, &config.moodle_base_url, c, log).await
+                {
+                    Ok(()) => {
+                        log.success("Headless re-login succeeded.");
+                        if let Ok(cookies) = get_cookies(&launched.page).await {
+                            save_cookies(&config.auth_state_path, &cookies);
+                        }
+                        log.info("Browser session restored via re-login.");
+                        return Ok(launched);
+                    }
+                    Err(e) => {
+                        log.warn(&format!(
+                            "Headless re-login failed with {}: {}",
+                            exe_path, e
+                        ));
+                        close_browser(launched).await;
+                    }
+                }
+            }
+        }
+        log.warn("Headless re-login failed with all browser candidates.");
+    }
+
+    anyhow::bail!("Browser session expired and headless re-login failed. Run `openape login` to re-authenticate.")
 }
 
 /// Close a browser session.
@@ -468,7 +529,13 @@ pub fn load_cookies(auth_state_path: &str) -> anyhow::Result<Vec<Cookie>> {
 /// Load saved session cookies as a `Cookie: ...` header value for the given URL.
 pub fn load_cookie_header(auth_state_path: &str, target_url: &str) -> Option<String> {
     let cookies = load_cookies(auth_state_path).ok()?;
-    if cookies.is_empty() { return None; }
+    if cookies.is_empty() {
+        return None;
+    }
     let header = cookies_to_cookie_header(&cookies, target_url);
-    if header.is_empty() { None } else { Some(header) }
+    if header.is_empty() {
+        None
+    } else {
+        Some(header)
+    }
 }

@@ -1,11 +1,11 @@
 use super::client::moodle_api_call;
-use crate::moodle_args;
-use crate::auth::{Cookie, cookies_to_cookie_header};
 use super::types::{SessionInfo, SuperVideoModule};
+use crate::auth::{cookies_to_cookie_header, Cookie};
 use crate::logger::Logger;
+use crate::moodle_args;
+use chromiumoxide::Page;
 use reqwest::Client;
 use std::collections::HashMap;
-use chromiumoxide::Page;
 
 /// Get supervideos in a course via WS API.
 pub async fn get_supervideos_in_course_api(
@@ -13,25 +13,50 @@ pub async fn get_supervideos_in_course_api(
     session: &SessionInfo,
     course_id: u64,
 ) -> anyhow::Result<Vec<SuperVideoModule>> {
-    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let ws_token = session
+        .ws_token
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("WS token required"))?;
 
     // Get course contents
     let args = moodle_args!("courseid" => course_id);
-    let data = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "core_course_get_contents", &args).await?;
+    let data = moodle_api_call(
+        client,
+        &session.moodle_base_url,
+        ws_token,
+        "core_course_get_contents",
+        &args,
+    )
+    .await?;
 
     let sections = data.as_array().cloned().unwrap_or_default();
     let mut videos = Vec::new();
 
     for section in &sections {
-        let modules = section.get("modules").and_then(|m| m.as_array()).cloned().unwrap_or_default();
+        let modules = section
+            .get("modules")
+            .and_then(|m| m.as_array())
+            .cloned()
+            .unwrap_or_default();
         for module in &modules {
             let modname = module.get("modname").and_then(|v| v.as_str()).unwrap_or("");
             if modname == "supervideo" {
                 videos.push(SuperVideoModule {
-                    cmid: module.get("id").and_then(|v| v.as_u64()).unwrap_or(0).to_string(),
-                    name: module.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string(),
-                    url: module.get("url").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                    cmid: module
+                        .get("id")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(0)
+                        .to_string(),
+                    name: module
+                        .get("name")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    url: module
+                        .get("url")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                     instance: module.get("instance").and_then(|v| v.as_u64()),
                     is_complete: false,
                 });
@@ -42,16 +67,33 @@ pub async fn get_supervideos_in_course_api(
     // Get completion status
     if session.user_id > 0 {
         let comp_args = moodle_args!("courseid" => course_id, "userid" => session.user_id);
-        if let Ok(comp_data) = moodle_api_call(client, &session.moodle_base_url, ws_token,
-            "core_completion_get_activities_completion_status", &comp_args).await
+        if let Ok(comp_data) = moodle_api_call(
+            client,
+            &session.moodle_base_url,
+            ws_token,
+            "core_completion_get_activities_completion_status",
+            &comp_args,
+        )
+        .await
         {
             if let Some(statuses) = comp_data.get("statuses").and_then(|s| s.as_array()) {
-                let completion_map: HashMap<u64, bool> = statuses.iter()
+                let completion_map: HashMap<u64, bool> = statuses
+                    .iter()
                     .filter_map(|s| {
-                        let has_completion = s.get("hascompletion").and_then(|v| v.as_bool()).unwrap_or(false);
+                        let has_completion = s
+                            .get("hascompletion")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
                         let cmid = s.get("cmid").and_then(|v| v.as_u64())?;
-                        let is_complete = s.get("isoverallcomplete").and_then(|v| v.as_bool()).unwrap_or(false);
-                        if has_completion { Some((cmid, is_complete)) } else { None }
+                        let is_complete = s
+                            .get("isoverallcomplete")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        if has_completion {
+                            Some((cmid, is_complete))
+                        } else {
+                            None
+                        }
                     })
                     .collect();
 
@@ -98,7 +140,10 @@ pub async fn save_video_progress_api(
     view_id: u64,
     duration: u64,
 ) -> anyhow::Result<bool> {
-    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let ws_token = session
+        .ws_token
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("WS token required"))?;
 
     let progress_args = moodle_args!(
         "view_id" => view_id,
@@ -108,11 +153,25 @@ pub async fn save_video_progress_api(
         "mapa" => build_duration_map(duration),
     );
 
-    let result = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "mod_supervideo_progress_save_mobile", &progress_args).await?;
+    let result = moodle_api_call(
+        client,
+        &session.moodle_base_url,
+        ws_token,
+        "mod_supervideo_progress_save_mobile",
+        &progress_args,
+    )
+    .await?;
 
-    let success = result.get("success").and_then(|v| v.as_bool()).unwrap_or(false)
-        || result.as_array().and_then(|a| a.first()).and_then(|v| v.get("success")).and_then(|v| v.as_bool()).unwrap_or(false);
+    let success = result
+        .get("success")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+        || result
+            .as_array()
+            .and_then(|a| a.first())
+            .and_then(|v| v.get("success"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
 
     Ok(success)
 }
@@ -124,17 +183,29 @@ pub async fn update_completion_status(
     cmid: u64,
     completed: bool,
 ) -> anyhow::Result<bool> {
-    let ws_token = session.ws_token.as_ref().ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+    let ws_token = session
+        .ws_token
+        .as_ref()
+        .ok_or_else(|| anyhow::anyhow!("WS token required"))?;
     let args = moodle_args!("cmid" => cmid, "completed" => if completed { 1 } else { 0 });
-    let result = moodle_api_call(client, &session.moodle_base_url, ws_token,
-        "core_completion_update_activity_completion_status_manually", &args).await?;
+    let result = moodle_api_call(
+        client,
+        &session.moodle_base_url,
+        ws_token,
+        "core_completion_update_activity_completion_status_manually",
+        &args,
+    )
+    .await?;
 
     // Moodle may return null (no error = success) or { "status": true }
     if result.is_null() {
         return Ok(true);
     }
 
-    Ok(result.get("status").and_then(|v| v.as_bool()).unwrap_or(false))
+    Ok(result
+        .get("status")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false))
 }
 
 /// Resolved video metadata from a supervideo page.
@@ -166,8 +237,9 @@ fn extract_video_sources_from_html(html: &str, log: &Logger) -> (Vec<String>, Ve
     // 3. <iframe src="...">
     let iframe_re = regex::Regex::new(r#"<iframe[^>]+src=["']([^"']+)["']"#).unwrap();
     let yt_re = regex::Regex::new(
-        r"(?:youtube\.com/(?:embed/|v/|watch\?v=)|youtu\.be/)([a-zA-Z0-9_-]{11})"
-    ).unwrap();
+        r"(?:youtube\.com/(?:embed/|v/|watch\?v=)|youtu\.be/)([a-zA-Z0-9_-]{11})",
+    )
+    .unwrap();
     for cap in iframe_re.captures_iter(html) {
         let src = &cap[1];
         video_sources.push(src.to_string());
@@ -178,7 +250,11 @@ fn extract_video_sources_from_html(html: &str, log: &Logger) -> (Vec<String>, Ve
 
     video_sources.dedup();
 
-    log.debug(&format!("Found {} video source(s), {} youtube id(s)", video_sources.len(), youtube_ids.len()));
+    log.debug(&format!(
+        "Found {} video source(s), {} youtube id(s)",
+        video_sources.len(),
+        youtube_ids.len()
+    ));
     (video_sources, youtube_ids)
 }
 
@@ -198,7 +274,8 @@ pub async fn get_video_metadata_browser(
     let _ = page.wait_for_navigation().await;
     tokio::time::sleep(std::time::Duration::from_millis(300)).await;
 
-    let url = page.url()
+    let url = page
+        .url()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get page URL: {}", e))?;
     if let Some(url_str) = url {
@@ -207,7 +284,8 @@ pub async fn get_video_metadata_browser(
         }
     }
 
-    let html = page.content()
+    let html = page
+        .content()
         .await
         .map_err(|e| anyhow::anyhow!("Failed to get page content: {}", e))?;
 
@@ -215,7 +293,8 @@ pub async fn get_video_metadata_browser(
     let view_id_re1 = regex::Regex::new(r"player_create.*?amd\.\w+\((\d+)").unwrap();
     let view_id_re2 = regex::Regex::new(r#"view_id['":\s]+(\d+)"#).unwrap();
 
-    let view_id = view_id_re1.captures(&html)
+    let view_id = view_id_re1
+        .captures(&html)
         .or_else(|| view_id_re2.captures(&html))
         .and_then(|c| c[1].parse::<u64>().ok());
 
@@ -254,13 +333,17 @@ pub async fn get_video_metadata_browser(
     // Fallback: regex from HTML
     if duration.is_none() {
         let duration_re = regex::Regex::new(r#"["']?duration["']?\s*[:=]\s*(\d+)"#).unwrap();
-        duration = duration_re.captures(&html)
+        duration = duration_re
+            .captures(&html)
             .and_then(|c| c[1].parse::<u64>().ok());
     }
 
     // Final fallback: default 600s
     let duration = duration.unwrap_or_else(|| {
-        log.debug(&format!("Duration unknown{}, using 600s", if is_youtube { " (YouTube)" } else { "" }));
+        log.debug(&format!(
+            "Duration unknown{}, using 600s",
+            if is_youtube { " (YouTube)" } else { "" }
+        ));
         600
     });
 
@@ -268,7 +351,12 @@ pub async fn get_video_metadata_browser(
 
     let (video_sources, youtube_ids) = extract_video_sources_from_html(&html, log);
 
-    Ok(VideoMetadata { video_sources, youtube_ids, view_id, duration })
+    Ok(VideoMetadata {
+        video_sources,
+        youtube_ids,
+        view_id,
+        duration,
+    })
 }
 
 /// Download a video file using cookies extracted from a browser session.
@@ -302,10 +390,13 @@ pub async fn download_video_with_cookies(
         anyhow::bail!("HTTP {} — download failed", resp.status());
     }
 
-    let bytes = resp.bytes().await
+    let bytes = resp
+        .bytes()
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
 
-    tokio::fs::write(output_path, &bytes).await
+    tokio::fs::write(output_path, &bytes)
+        .await
         .map_err(|e| anyhow::anyhow!("Failed to write file: {}", e))?;
 
     Ok(bytes.len() as u64)

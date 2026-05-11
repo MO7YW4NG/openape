@@ -1,14 +1,14 @@
-pub mod client;
 pub mod assignment;
-pub mod page;
 pub mod calendar;
+pub mod client;
 pub mod course;
 pub mod forum;
 pub mod grade;
 pub mod material;
 pub mod message;
+pub mod page;
 pub mod quiz;
+pub mod seb;
 pub mod types;
 pub mod upload;
 pub mod video;
-pub mod seb;

@@ -62,7 +62,12 @@ pub fn build_ws_params(args: &HashMap<String, Value>) -> String {
     parts.join("&")
 }
 
-fn build_ws_url(base_url: &str, ws_token: &str, function: &str, args: &HashMap<String, Value>) -> String {
+fn build_ws_url(
+    base_url: &str,
+    ws_token: &str,
+    function: &str,
+    args: &HashMap<String, Value>,
+) -> String {
     let params = build_ws_params(args);
     format!(
         "{}/webservice/rest/server.php?wstoken={}&wsfunction={}&moodlewsrestformat=json&{}",
@@ -72,7 +77,8 @@ fn build_ws_url(base_url: &str, ws_token: &str, function: &str, args: &HashMap<S
 
 async fn check_ws_response(result: Value, function: &str) -> Result<Value, MoodleError> {
     if result.get("exception").is_some() || result.get("errorcode").is_some() {
-        let msg = result.get("message")
+        let msg = result
+            .get("message")
             .and_then(|m| m.as_str())
             .or_else(|| result.get("errorcode").and_then(|m| m.as_str()))
             .or_else(|| result.get("exception").and_then(|m| m.as_str()))
@@ -82,8 +88,13 @@ async fn check_ws_response(result: Value, function: &str) -> Result<Value, Moodl
             message: msg.to_string(),
         });
     }
-    if result.get("error").and_then(|e| e.as_bool()).unwrap_or(false) {
-        let msg = result.get("message")
+    if result
+        .get("error")
+        .and_then(|e| e.as_bool())
+        .unwrap_or(false)
+    {
+        let msg = result
+            .get("message")
             .or_else(|| result.get("exception").and_then(|e| e.get("message")))
             .and_then(|m| m.as_str())
             .unwrap_or("Unknown error");
@@ -121,10 +132,13 @@ pub async fn moodle_api_call_seb(
     use crate::moodle::seb::compute_config_key_hash;
     let url = build_ws_url(base_url, ws_token, function, args);
     let hash = compute_config_key_hash(&url, seb_config_key);
-    let result: Value = client.get(&url)
+    let result: Value = client
+        .get(&url)
         .header("X-SafeExamBrowser-ConfigKeyHash", hash)
-        .send().await?
-        .json().await?;
+        .send()
+        .await?
+        .json()
+        .await?;
     check_ws_response(result, function).await
 }
 

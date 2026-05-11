@@ -23,13 +23,13 @@ impl Logger {
     }
 
     pub fn info(&self, msg: &str) {
-        if !self.silent {
+        if self.verbose && !self.silent {
             eprintln!("{}  {}", self.color("36", "[INFO]"), msg);
         }
     }
 
     pub fn success(&self, msg: &str) {
-        if !self.silent {
+        if self.verbose && !self.silent {
             eprintln!("{}   {}", self.color("32", "[OK]"), msg);
         }
     }

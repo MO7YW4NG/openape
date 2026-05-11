@@ -9,7 +9,8 @@ pub fn strip_html_tags(html: &str) -> String {
     let numeric_re = Regex::new(r"&#(\d+);").unwrap();
 
     let text = tag_re.replace_all(html, "");
-    let text = text.replace("&nbsp;", " ")
+    let text = text
+        .replace("&nbsp;", " ")
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
@@ -58,11 +59,9 @@ pub fn format_file_size(bytes: u64, decimals: usize) -> String {
 /// Format Moodle timestamp to localized string.
 pub fn format_moodle_date(timestamp: Option<i64>) -> String {
     match timestamp {
-        Some(ts) if ts > 0 => {
-            chrono::DateTime::from_timestamp(ts, 0)
-                .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
-                .unwrap_or_else(|| "無期限".to_string())
-        }
+        Some(ts) if ts > 0 => chrono::DateTime::from_timestamp(ts, 0)
+            .map(|dt| dt.format("%Y-%m-%d %H:%M:%S").to_string())
+            .unwrap_or_else(|| "無期限".to_string()),
         _ => "無期限".to_string(),
     }
 }
@@ -114,19 +113,18 @@ pub fn strip_html_keep_lines(html: &str) -> String {
     if html.is_empty() {
         return String::new();
     }
-    let text = Regex::new(r"<br\s*/?>").unwrap()
-        .replace_all(html, "\n");
-    let text = Regex::new(r"</p>").unwrap()
-        .replace_all(&text, "\n");
-    let text = Regex::new(r"<[^>]+>").unwrap()
-        .replace_all(&text, "");
-    let text = text.replace("&nbsp;", " ")
+    let text = Regex::new(r"<br\s*/?>").unwrap().replace_all(html, "\n");
+    let text = Regex::new(r"</p>").unwrap().replace_all(&text, "\n");
+    let text = Regex::new(r"<[^>]+>").unwrap().replace_all(&text, "");
+    let text = text
+        .replace("&nbsp;", " ")
         .replace("&amp;", "&")
         .replace("&lt;", "<")
         .replace("&gt;", ">")
         .replace("&quot;", "\"")
         .replace("&#39;", "'");
-    Regex::new(r"\n{3,}").unwrap()
+    Regex::new(r"\n{3,}")
+        .unwrap()
         .replace_all(text.trim(), "\n\n")
         .trim()
         .to_string()
@@ -141,10 +139,15 @@ pub fn parse_question_html(html: &str) -> (String, Vec<String>) {
     };
 
     let option_re = Regex::new(r#"(?s)data-region="answer-label">(.*?)</div>\s*</div>"#).unwrap();
-    let options: Vec<String> = option_re.captures_iter(html)
+    let options: Vec<String> = option_re
+        .captures_iter(html)
         .filter_map(|caps| {
             let stripped = strip_html_keep_lines(&caps[1]);
-            if stripped.is_empty() { None } else { Some(stripped) }
+            if stripped.is_empty() {
+                None
+            } else {
+                Some(stripped)
+            }
         })
         .collect();
 
@@ -154,7 +157,8 @@ pub fn parse_question_html(html: &str) -> (String, Vec<String>) {
 /// Parse the saved/selected answer from quiz question HTML.
 pub fn parse_saved_answer(html: &str) -> Option<serde_json::Value> {
     // Single choice: <input type="radio" ... value="N" ... checked="checked">
-    let radio_re = Regex::new(r#"<input type="radio"[^>]*value="(\d+)"[^>]*checked="checked""#).unwrap();
+    let radio_re =
+        Regex::new(r#"<input type="radio"[^>]*value="(\d+)"[^>]*checked="checked""#).unwrap();
     if let Some(caps) = radio_re.captures(html) {
         if &caps[1] != "-1" {
             return Some(serde_json::Value::String(caps[1].to_string()));
@@ -162,8 +166,11 @@ pub fn parse_saved_answer(html: &str) -> Option<serde_json::Value> {
     }
 
     // Multiple choice: checkboxes with checked="checked"
-    let checkbox_re = Regex::new(r#"<input type="checkbox"[^>]*name="[^"]*choice(\d+)"[^>]*checked="checked""#).unwrap();
-    let checked: Vec<String> = checkbox_re.captures_iter(html)
+    let checkbox_re =
+        Regex::new(r#"<input type="checkbox"[^>]*name="[^"]*choice(\d+)"[^>]*checked="checked""#)
+            .unwrap();
+    let checked: Vec<String> = checkbox_re
+        .captures_iter(html)
         .map(|caps| caps[1].to_string())
         .collect();
     if !checked.is_empty() {
