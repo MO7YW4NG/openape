@@ -83,11 +83,21 @@ pub fn find_browser_paths() -> Vec<String> {
         }
     } else {
         let candidates = [
+            // System-wide installs
             "/usr/bin/microsoft-edge",
             "/usr/bin/google-chrome",
+            "/usr/bin/google-chrome-stable",
             "/usr/bin/chromium-browser",
             "/usr/bin/chromium",
             "/usr/bin/brave-browser",
+            // Snap installs
+            "/snap/bin/chromium",
+            "/snap/bin/google-chrome",
+            "/snap/bin/brave",
+            // Flatpak installs
+            "/var/lib/flatpak/exports/bin/org.chromium.Chromium",
+            "/var/lib/flatpak/exports/bin/com.google.Chrome",
+            "/var/lib/flatpak/exports/bin/com.brave.Browser",
         ];
         for c in &candidates {
             if Path::new(c).exists() {
