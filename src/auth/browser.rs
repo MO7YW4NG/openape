@@ -163,10 +163,12 @@ pub async fn launch_browser(
             .arg("--disable-infobars")
             .arg("--noerrdialogs")
             .arg("--hide-crash-restore-bubble")
-            // Use modern headless=new mode (less detectable than old headless)
-            .arg("--headless=new")
             // Hide automation indicators to bypass bot detection on Microsoft login
             .arg("--disable-blink-features=AutomationControlled");
+
+        if headless {
+            config_builder = config_builder.arg("--headless=new");
+        }
     }
     #[cfg(not(windows))]
     {
@@ -175,8 +177,11 @@ pub async fn launch_browser(
             .arg("--disable-gpu")
             .arg("--disable-dev-shm-usage")
             .arg("--disable-session-crashed-bubble")
-            .arg("--headless=new")
             .arg("--disable-blink-features=AutomationControlled");
+
+        if headless {
+            config_builder = config_builder.arg("--headless=new");
+        }
     }
 
     let config = config_builder

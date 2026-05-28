@@ -42,7 +42,6 @@ pub async fn launch_authenticated(
     }
 
     // Always use clean profile + cookies (simplest and most reliable).
-    // Try headless first on all platforms, fall back to headed if needed.
     log.info(&format!(
         "Found {} browser candidate(s)",
         browser_candidates.len()
@@ -50,11 +49,10 @@ pub async fn launch_authenticated(
     let mut launched_opt: Option<LaunchedBrowser> = None;
     let mut last_err: Option<anyhow::Error> = None;
 
-    // Attempt headless first unless user explicitly wants headed
     let headless_modes = if config.headless {
         vec![true]
     } else {
-        vec![true, false]
+        vec![false]
     };
 
     'outer: for &use_headless in &headless_modes {
@@ -104,24 +102,30 @@ pub async fn launch_authenticated(
     }
 
     // Session invalid - need to login
-    // Try headless auto-login if credentials are stored
+    // Try headless auto-login if credentials are stored and headless mode was requested.
     let creds = StoredCredentials::load(&config.auth_state_path);
     if let Some(ref c) = creds {
-        log.info(&format!(
-            "Stored credentials found. Attempting headless login for {}...",
-            c.email()
-        ));
-        match perform_headless_login(&launched.page, &config.moodle_base_url, c, log).await {
-            Ok(()) => {
-                log.success("Headless login succeeded.");
-                let ws_token =
-                    finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
-                return Ok((launched, ws_token));
+        if config.headless {
+            log.info(&format!(
+                "Stored credentials found. Attempting headless login for {}...",
+                c.email()
+            ));
+            match perform_headless_login(&launched.page, &config.moodle_base_url, c, log).await {
+                Ok(()) => {
+                    log.success("Headless login succeeded.");
+                    let ws_token =
+                        finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
+                    return Ok((launched, ws_token));
+                }
+                Err(e) => {
+                    close_browser(launched).await;
+                    anyhow::bail!("Headless login failed: {}", e);
+                }
             }
-            Err(e) => {
-                close_browser(launched).await;
-                anyhow::bail!("Headless login failed: {}", e);
-            }
+        } else {
+            log.info(
+                "Stored credentials found, but headed mode was requested. Using interactive login.",
+            );
         }
     }
 

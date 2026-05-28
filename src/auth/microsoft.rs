@@ -750,7 +750,38 @@ pub async fn perform_headless_login(
                 .unwrap_or_default();
 
             if use_result != "NOT_FOUND" {
-                let _ = wait_for_email_page(page, Duration::from_secs(6), log).await;
+                log.info(&format!(
+                    "Clicked 'Use another account' ({use_result}). Waiting for email page..."
+                ));
+                if let Err(e) = wait_for_email_page(page, Duration::from_secs(6), log).await {
+                    let current_url = page.url().await.ok().flatten().unwrap_or_default();
+                    if current_url.contains(&base_domain)
+                        && !current_url.contains("login")
+                        && !current_url.contains("microsoftonline")
+                    {
+                        log.success("Login completed while waiting for email page.");
+                        return Ok(());
+                    }
+                    anyhow::bail!(
+                        "Clicked 'Use another account' but Microsoft email input did not appear. Current URL: {}. {}",
+                        current_url,
+                        e
+                    );
+                }
+                log.info("Email page reached after 'Use another account'.");
+            } else {
+                let current_url = page.url().await.ok().flatten().unwrap_or_default();
+                if current_url.contains(&base_domain)
+                    && !current_url.contains("login")
+                    && !current_url.contains("microsoftonline")
+                {
+                    log.success("Login completed during account picker handling.");
+                    return Ok(());
+                }
+                anyhow::bail!(
+                    "Account tile not found and could not click 'Use another account'. Current URL: {}",
+                    current_url
+                );
             }
         }
     }
@@ -793,6 +824,16 @@ pub async fn perform_headless_login(
             }
             Err(e) => return Err(e),
         }
+    }
+
+    let on_password_page = js_element_exists(page, "input[name='passwd']").await
+        || js_element_exists(page, "input[type='password']").await;
+    if !on_password_page {
+        let current_url = page.url().await.ok().flatten().unwrap_or_default();
+        anyhow::bail!(
+            "Microsoft login did not reach email or password page. Current URL: {}",
+            current_url
+        );
     }
 
     complete_password_login(page, base_url, &credentials.password, log).await
