@@ -19,6 +19,7 @@ Thumbs.db
 
 # Claude
 .claude/
+.agents/
 
 # Rust
 /target

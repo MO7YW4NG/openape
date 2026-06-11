@@ -23,6 +23,9 @@ metadata:
 > # Or use flags (not recommended for security reasons)
 > openape login --id <student-id> --password <password>
 > ```
+>
+> If stored credentials already exist but the WS token is missing or expired,
+> run `openape login` first to refresh the session before other commands.
 
 ```bash
 openape <command> [subcommand] [args] [flags]
