@@ -47,16 +47,11 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
     match cmd {
         crate::AuthCommands::Login { id, password } => {
             // Handle credential storage for headless login
-            let _creds = match (id, password) {
-                (Some(sid), Some(pwd)) => {
-                    let c = StoredCredentials {
-                        id: sid.clone(),
-                        password: pwd.clone(),
-                    };
-                    c.save(&config.auth_state_path);
-                    log.info(&format!("Credentials saved for {}@o365st.cycu.edu.tw", sid));
-                    Some(c)
-                }
+            let creds_to_store = match (id, password) {
+                (Some(sid), Some(pwd)) => Some(StoredCredentials {
+                    id: sid.clone(),
+                    password: pwd.clone(),
+                }),
                 (Some(_), None) => {
                     anyhow::bail!("--id requires --password for headless login.");
                 }
@@ -65,6 +60,15 @@ pub async fn run(cmd: &crate::AuthCommands, cli: &Cli) -> Result<()> {
                 }
                 (None, None) => None,
             };
+
+            auth::clear_saved_session(&config, true);
+            if let Some(c) = &creds_to_store {
+                c.save(&config.auth_state_path);
+                log.info(&format!(
+                    "Credentials saved for {}@o365st.cycu.edu.tw",
+                    c.id
+                ));
+            }
 
             check_for_update(&log).await;
             log.info("Launching browser for login...");

@@ -358,6 +358,25 @@ async fn page_contains_text(page: &Page, text: &str) -> bool {
         .unwrap_or(false)
 }
 
+async fn force_microsoft_login_prompt(page: &Page, log: &Logger) -> anyhow::Result<()> {
+    let Some(url) = page.url().await.ok().flatten() else {
+        return Ok(());
+    };
+    if !url.contains("login.microsoftonline.com") || url.contains("prompt=") {
+        return Ok(());
+    }
+
+    let separator = if url.contains('?') { "&" } else { "?" };
+    let forced_url = format!("{url}{separator}prompt=login");
+    log.info("Forcing Microsoft credential prompt for the requested account...");
+    page.goto(&forced_url)
+        .await
+        .context("Failed to force Microsoft login prompt")?;
+    let _ = page.wait_for_navigation().await;
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    Ok(())
+}
+
 async fn sign_in_button_ready(page: &Page) -> bool {
     let js = format!(
         r#"(function() {{
@@ -523,6 +542,7 @@ pub async fn perform_headless_login(
             }
             if url.contains("microsoftonline") {
                 log.info(&format!("Reached Microsoft login page: {}", url));
+                force_microsoft_login_prompt(page, log).await?;
                 break;
             }
         }
@@ -575,7 +595,9 @@ pub async fn perform_headless_login(
                             break;
                         }
                         if url.contains(&base_domain) && !url.contains("login") {
-                            break;
+                            anyhow::bail!(
+                                "Microsoft returned to Moodle before the requested account was selected."
+                            );
                         }
                     }
                     if tokio::time::Instant::now() > sso_deadline {
@@ -594,11 +616,13 @@ pub async fn perform_headless_login(
                     && !url.contains("login")
                     && !url.contains("microsoftonline")
                 {
-                    log.success("Already logged in (session valid after SSO button click).");
-                    return Ok(());
+                    anyhow::bail!(
+                        "Microsoft returned to Moodle before the requested account was selected."
+                    );
                 }
                 if url.contains("microsoftonline") {
                     log.info(&format!("Reached Microsoft login page: {}", url));
+                    force_microsoft_login_prompt(page, log).await?;
                     break;
                 }
             }
@@ -759,8 +783,9 @@ pub async fn perform_headless_login(
                         && !current_url.contains("login")
                         && !current_url.contains("microsoftonline")
                     {
-                        log.success("Login completed while waiting for email page.");
-                        return Ok(());
+                        anyhow::bail!(
+                            "Microsoft returned to Moodle before the requested account email was entered."
+                        );
                     }
                     anyhow::bail!(
                         "Clicked 'Use another account' but Microsoft email input did not appear. Current URL: {}. {}",
@@ -775,8 +800,9 @@ pub async fn perform_headless_login(
                     && !current_url.contains("login")
                     && !current_url.contains("microsoftonline")
                 {
-                    log.success("Login completed during account picker handling.");
-                    return Ok(());
+                    anyhow::bail!(
+                        "Microsoft returned to Moodle before the requested account was selected."
+                    );
                 }
                 anyhow::bail!(
                     "Account tile not found and could not click 'Use another account'. Current URL: {}",

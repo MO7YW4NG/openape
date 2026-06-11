@@ -63,6 +63,13 @@ impl SessionMeta {
         self.ws_token_timestamp = Some(chrono::Utc::now().timestamp());
     }
 
+    /// Clear cached user-scoped API authentication.
+    pub fn clear_api_auth(&mut self) {
+        self.ws_token = None;
+        self.ws_token_timestamp = None;
+        self.user_id = None;
+    }
+
     /// Save user agent string.
     pub fn set_user_agent(&mut self, ua: &str) {
         self.user_agent = Some(ua.to_string());

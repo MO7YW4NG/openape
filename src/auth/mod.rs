@@ -36,11 +36,6 @@ pub async fn launch_authenticated(
 
     // Load saved session metadata
     let mut meta = SessionMeta::load(&config.auth_state_path);
-    let ws_token = meta.get_ws_token();
-    if ws_token.is_some() {
-        log.info("Loaded saved Web Service Token.");
-    }
-
     // Always use clean profile + cookies (simplest and most reliable).
     log.info(&format!(
         "Found {} browser candidate(s)",
@@ -96,7 +91,7 @@ pub async fn launch_authenticated(
     let session_valid = check_session_valid(&launched.page, &config.moodle_base_url).await;
 
     if session_valid {
-        let ws_token = finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
+        let ws_token = finalize_session(&launched.page, &mut meta, config, log).await?;
         log.success("Session restored successfully.");
         return Ok((launched, ws_token));
     }
@@ -113,8 +108,7 @@ pub async fn launch_authenticated(
             match perform_headless_login(&launched.page, &config.moodle_base_url, c, log).await {
                 Ok(()) => {
                     log.success("Headless login succeeded.");
-                    let ws_token =
-                        finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
+                    let ws_token = finalize_session(&launched.page, &mut meta, config, log).await?;
                     return Ok((launched, ws_token));
                 }
                 Err(e) => {
@@ -149,14 +143,14 @@ pub async fn launch_authenticated(
             None => anyhow::bail!("Failed to relaunch browser in headed mode."),
         };
         perform_login(&launched.page, &config.moodle_base_url, log).await?;
-        let ws_token = finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
+        let ws_token = finalize_session(&launched.page, &mut meta, config, log).await?;
 
         return Ok((launched, ws_token));
     }
 
     // Already headed, just login
     perform_login(&launched.page, &config.moodle_base_url, log).await?;
-    let ws_token = finalize_session(&launched.page, &mut meta, config, log, ws_token).await?;
+    let ws_token = finalize_session(&launched.page, &mut meta, config, log).await?;
 
     Ok((launched, ws_token))
 }
@@ -183,36 +177,31 @@ async fn finalize_session(
     meta: &mut SessionMeta,
     config: &AppConfig,
     log: &Logger,
-    existing_ws_token: Option<String>,
 ) -> anyhow::Result<Option<String>> {
     // Capture and save browser user-agent
-    if meta.user_agent.is_none() {
-        if let Some(ua) = get_browser_user_agent(page).await {
-            meta.set_user_agent(&ua);
-        }
+    if let Some(ua) = get_browser_user_agent(page).await {
+        meta.set_user_agent(&ua);
     }
 
-    // Acquire WS token if we don't have one
-    let mut ws_token = existing_ws_token.or_else(|| meta.get_ws_token());
-    if ws_token.is_none() {
-        match acquire_ws_token(page, &config.moodle_base_url, log).await {
-            Ok(token) => {
-                meta.set_ws_token(&token);
-                ws_token = Some(token.clone());
-                save_user_id(meta, &token, &config.moodle_base_url, log).await;
-                meta.save(&config.auth_state_path);
-            }
-            Err(e) => {
-                log.warn(&format!("Failed to acquire WS Token: {}", e));
-            }
+    let ws_token = match acquire_ws_token(page, &config.moodle_base_url, log).await {
+        Ok(token) => {
+            meta.set_ws_token(&token);
+            save_user_id(meta, &token, &config.moodle_base_url, log).await;
+            Some(token)
         }
-    }
+        Err(e) => {
+            meta.clear_api_auth();
+            log.warn(&format!("Failed to acquire WS Token: {}", e));
+            None
+        }
+    };
 
     // Save cookies
     if let Ok(cookies) = get_cookies(page).await {
         save_cookies(&config.auth_state_path, &cookies);
     }
 
+    meta.save(&config.auth_state_path);
     Ok(ws_token)
 }
 
@@ -328,9 +317,6 @@ async fn acquire_ws_token(page: &Page, base_url: &str, log: &Logger) -> anyhow::
 
 /// Fetch and save user ID from Moodle site info API.
 async fn save_user_id(meta: &mut SessionMeta, ws_token: &str, base_url: &str, _log: &Logger) {
-    if meta.user_id.is_some() {
-        return;
-    }
     let url = format!(
         "{}/webservice/rest/server.php?wstoken={}&wsfunction=core_webservice_get_site_info&moodlewsrestformat=json",
         base_url, ws_token
@@ -341,6 +327,34 @@ async fn save_user_id(meta: &mut SessionMeta, ws_token: &str, base_url: &str, _l
                 meta.set_user_id(id);
             }
         }
+    }
+}
+
+/// Remove saved browser/API session files. Optionally keep stored credentials.
+pub fn clear_saved_session(config: &AppConfig, clear_credentials: bool) {
+    let auth_state_path = Path::new(&config.auth_state_path);
+    if auth_state_path.exists() {
+        let _ = std::fs::remove_file(auth_state_path);
+    }
+
+    let cookies_path = get_cookies_path(&config.auth_state_path);
+    if cookies_path.exists() {
+        let _ = std::fs::remove_file(&cookies_path);
+    }
+
+    let meta_path_str = SessionMeta::meta_path(&config.auth_state_path);
+    let meta_path = Path::new(&meta_path_str);
+    if meta_path.exists() {
+        let _ = std::fs::remove_file(meta_path);
+    }
+
+    if clear_credentials {
+        StoredCredentials::delete(&config.auth_state_path);
+    }
+
+    let user_data_dir = get_user_data_dir(&config.auth_state_path);
+    if user_data_dir.exists() {
+        let _ = std::fs::remove_dir_all(&user_data_dir);
     }
 }
 
@@ -356,24 +370,7 @@ pub fn check_session_status(config: &AppConfig) -> (bool, Option<String>) {
 
 /// Remove saved session files.
 pub fn logout(config: &AppConfig) {
-    // Remove cookies file
-    let cookies_path = get_cookies_path(&config.auth_state_path);
-    if cookies_path.exists() {
-        let _ = std::fs::remove_file(&cookies_path);
-    }
-    // Remove metadata
-    let meta_path_str = SessionMeta::meta_path(&config.auth_state_path);
-    let meta_path = Path::new(&meta_path_str);
-    if meta_path.exists() {
-        let _ = std::fs::remove_file(meta_path);
-    }
-    // Remove stored credentials
-    StoredCredentials::delete(&config.auth_state_path);
-    // Clean up old browser data dir if exists
-    let user_data_dir = get_user_data_dir(&config.auth_state_path);
-    if user_data_dir.exists() {
-        let _ = std::fs::remove_dir_all(&user_data_dir);
-    }
+    clear_saved_session(config, true);
 }
 
 /// Launch a browser session using saved cookies (clean profile).
