@@ -28,6 +28,7 @@ pub async fn run(cmd: &crate::MaterialsCommands, cli: &Cli) -> Result<()> {
                         "name": r.name,
                         "url": r.url,
                         "mod_type": r.mod_type,
+                        "folder_name": r.folder_name,
                         "mimetype": r.mimetype,
                         "filesize": r.filesize.map(|s| format_file_size(s, 1)),
                     })
@@ -64,6 +65,7 @@ pub async fn run(cmd: &crate::MaterialsCommands, cli: &Cli) -> Result<()> {
                         "name": r.name,
                         "url": r.url,
                         "mod_type": r.mod_type,
+                        "folder_name": r.folder_name,
                         "mimetype": r.mimetype,
                         "filesize": r.filesize.map(|s| format_file_size(s, 1)),
                     })
@@ -113,6 +115,54 @@ pub async fn run(cmd: &crate::MaterialsCommands, cli: &Cli) -> Result<()> {
             let result = serde_json::json!({
                 "action": "download",
                 "course_id": *course_id,
+                "output_dir": output_dir.to_string_lossy(),
+                "downloaded": summary.downloaded,
+                "skipped": summary.skipped,
+                "failed": summary.failed,
+                "files": summary.files,
+            });
+            format_and_output(&[result], ctx.output, None);
+        }
+
+        crate::MaterialsCommands::DownloadFile {
+            course_id,
+            query,
+            output_dir,
+        } => {
+            let mut resources =
+                get_course_contents_resources(&ctx.client, &ctx.session, *course_id).await?;
+            if resources.is_empty() {
+                ctx.log.info("No materials found.");
+                let result = serde_json::json!({
+                    "action": "download_file",
+                    "course_id": *course_id,
+                    "query": query,
+                    "output_dir": output_dir.to_string_lossy(),
+                    "downloaded": 0,
+                    "skipped": 0,
+                    "failed": 0,
+                    "files": [],
+                });
+                format_and_output(&[result], ctx.output, None);
+                return Ok(());
+            }
+
+            resources = resolve_pdfannotator_in_resources(resources, cli).await?;
+            let resource = find_single_resource(&resources, query)?;
+
+            let ws_token = ctx
+                .session
+                .ws_token
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("WS token required"))?;
+            let summary =
+                download_resources(&ctx, std::slice::from_ref(resource), output_dir, ws_token)
+                    .await?;
+
+            let result = serde_json::json!({
+                "action": "download_file",
+                "course_id": *course_id,
+                "query": query,
                 "output_dir": output_dir.to_string_lossy(),
                 "downloaded": summary.downloaded,
                 "skipped": summary.skipped,
@@ -422,6 +472,73 @@ struct DownloadSummary {
     files: Vec<serde_json::Value>,
 }
 
+fn resource_match_key(resource: &crate::moodle::types::ResourceModule) -> String {
+    match resource.folder_name.as_deref() {
+        Some(folder_name) if !folder_name.is_empty() => {
+            format!("{}/{}", folder_name, resource.name)
+        }
+        _ => resource.name.clone(),
+    }
+}
+
+fn find_single_resource<'a>(
+    resources: &'a [crate::moodle::types::ResourceModule],
+    query: &str,
+) -> Result<&'a crate::moodle::types::ResourceModule> {
+    let normalized_query = query.trim().to_lowercase();
+    if normalized_query.is_empty() {
+        anyhow::bail!("Query cannot be empty.");
+    }
+
+    let exact: Vec<_> = resources
+        .iter()
+        .filter(|r| {
+            r.name.to_lowercase() == normalized_query
+                || resource_match_key(r).to_lowercase() == normalized_query
+                || r.cmid.to_lowercase() == normalized_query
+        })
+        .collect();
+
+    let matches = if exact.is_empty() {
+        resources
+            .iter()
+            .filter(|r| {
+                r.name.to_lowercase().contains(&normalized_query)
+                    || resource_match_key(r)
+                        .to_lowercase()
+                        .contains(&normalized_query)
+            })
+            .collect::<Vec<_>>()
+    } else {
+        exact
+    };
+
+    match matches.as_slice() {
+        [resource] => Ok(*resource),
+        [] => anyhow::bail!("No material matched query: {}", query),
+        candidates => {
+            let preview = candidates
+                .iter()
+                .take(10)
+                .map(|r| {
+                    format!(
+                        "cmid={} folder={} name={}",
+                        r.cmid,
+                        r.folder_name.as_deref().unwrap_or(""),
+                        r.name
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            anyhow::bail!(
+                "Query matched {} materials. Use a more specific filename. Candidates: {}",
+                candidates.len(),
+                preview
+            );
+        }
+    }
+}
+
 async fn download_resources(
     ctx: &ApiCtx,
     resources: &[crate::moodle::types::ResourceModule],
@@ -462,7 +579,10 @@ async fn download_resources(
     std::fs::create_dir_all(output_dir)?;
 
     for resource in resources {
-        if resource.mod_type != "resource" && resource.mod_type != "pdfannotator" {
+        if resource.mod_type != "resource"
+            && resource.mod_type != "pdfannotator"
+            && resource.mod_type != "folder"
+        {
             summary.skipped += 1;
             summary.files.push(serde_json::json!({
                 "name": resource.name,
@@ -503,7 +623,14 @@ async fn download_resources(
             }
         }
 
-        let dest = output_dir.join(&filename);
+        let parent_dir = resource
+            .folder_name
+            .as_deref()
+            .map(|name| output_dir.join(sanitize_filename(name, 100)))
+            .unwrap_or_else(|| output_dir.clone());
+        std::fs::create_dir_all(&parent_dir)?;
+
+        let dest = parent_dir.join(&filename);
         if dest.exists() {
             ctx.log.info(&format!("  Skip (exists): {}", filename));
             summary.skipped += 1;
@@ -515,7 +642,9 @@ async fn download_resources(
             continue;
         }
 
-        let url = if resource.url.contains('?') {
+        let url = if resource.url.contains("token=") || resource.url.contains("wstoken=") {
+            resource.url.clone()
+        } else if resource.url.contains('?') {
             format!("{}&token={}", resource.url, ws_token)
         } else {
             format!("{}?token={}", resource.url, ws_token)

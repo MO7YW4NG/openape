@@ -10,7 +10,7 @@ use chromiumoxide::Page;
 use futures::StreamExt;
 use reqwest::Client;
 
-/// Get resources (resource + pdfannotator) from course contents via core_course_get_contents.
+/// Get resources (resource + pdfannotator + folder files) from course contents via core_course_get_contents.
 pub async fn get_course_contents_resources(
     client: &Client,
     session: &SessionInfo,
@@ -41,7 +41,7 @@ pub async fn get_course_contents_resources(
             .unwrap_or_default();
         for module in &modules {
             let modname = module.get("modname").and_then(|v| v.as_str()).unwrap_or("");
-            if modname != "resource" && modname != "pdfannotator" {
+            if modname != "resource" && modname != "pdfannotator" && modname != "folder" {
                 continue;
             }
 
@@ -58,7 +58,53 @@ pub async fn get_course_contents_resources(
                 .unwrap_or("")
                 .to_string();
 
-            if modname == "pdfannotator" {
+            if modname == "folder" {
+                let files = module
+                    .get("contents")
+                    .and_then(|c| c.as_array())
+                    .cloned()
+                    .unwrap_or_default();
+
+                for file in files {
+                    let item_type = file.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                    if item_type != "file" {
+                        continue;
+                    }
+
+                    let file_url = file
+                        .get("fileurl")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("")
+                        .to_string();
+                    let filename = file
+                        .get("filename")
+                        .and_then(|v| v.as_str())
+                        .filter(|s| !s.is_empty())
+                        .or_else(|| file.get("filepath").and_then(|v| v.as_str()))
+                        .unwrap_or(&name)
+                        .to_string();
+                    let mimetype = file
+                        .get("mimetype")
+                        .and_then(|v| v.as_str())
+                        .map(String::from);
+                    let filesize = file.get("filesize").and_then(|v| v.as_u64());
+                    let modified = file.get("timemodified").and_then(|v| v.as_i64());
+
+                    resources.push(ResourceModule {
+                        cmid: cmid.to_string(),
+                        name: filename,
+                        url: file_url,
+                        view_url: Some(view_url.clone()),
+                        course_id,
+                        mod_type: "folder".to_string(),
+                        folder_name: Some(name.clone()),
+                        contextid,
+                        mimetype,
+                        filesize,
+                        modified,
+                    });
+                }
+            } else if modname == "pdfannotator" {
                 // Rule-based fallback URL for token-auth download
                 let fallback_url = if let Some(ctxid) = contextid {
                     let filename = format!("{}.pdf", &name);
@@ -78,6 +124,7 @@ pub async fn get_course_contents_resources(
                     view_url: Some(view_url),
                     course_id,
                     mod_type: "pdfannotator".to_string(),
+                    folder_name: None,
                     contextid,
                     mimetype: Some("application/pdf".to_string()),
                     filesize: None,
@@ -113,6 +160,7 @@ pub async fn get_course_contents_resources(
                     view_url: None,
                     course_id,
                     mod_type: "resource".to_string(),
+                    folder_name: None,
                     contextid,
                     mimetype,
                     filesize,

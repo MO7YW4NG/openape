@@ -255,6 +255,13 @@ pub enum MaterialsCommands {
         #[arg(long, default_value = "./downloads")]
         output_dir: PathBuf,
     },
+    /// Download one material matching a filename, folder/name, or cmid
+    DownloadFile {
+        course_id: u64,
+        query: String,
+        #[arg(long, default_value = "./downloads")]
+        output_dir: PathBuf,
+    },
     /// Download all materials from all courses
     DownloadAll {
         #[arg(long, default_value = "./downloads")]

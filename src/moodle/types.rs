@@ -242,6 +242,8 @@ pub struct ResourceModule {
     pub course_id: u64,
     pub mod_type: String,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub folder_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub contextid: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mimetype: Option<String>,

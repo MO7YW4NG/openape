@@ -69,6 +69,7 @@ openape <command> [subcommand] [args] [flags]
   - `list <course-id>` — List materials in a course
   - `list-all` — List all materials across courses. Flags: `--level in_progress|all`
   - `download <course-id>` — Download all materials from a course
+  - `download-file <course-id> <query>` — Download one material matching filename, folder/name, or cmid. Flags: `--output-dir <path>`
   - `download-all` — Download all materials from all courses. Flags: `--output-dir <path>`
   - `complete <course-id>` — Mark all incomplete resources (non-video) as complete
   - `complete-all` — Mark all incomplete resources across all in-progress courses
