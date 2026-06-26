@@ -19,7 +19,12 @@ use std::path::Path;
 use crate::config::AppConfig;
 use crate::logger::Logger;
 use crate::moodle::types::SessionInfo;
+use chromiumoxide::cdp::browser_protocol::fetch::{
+    ContinueRequestParams, DisableParams as FetchDisable, EnableParams as FetchEnable,
+    EventRequestPaused, RequestPattern, RequestStage,
+};
 use chromiumoxide::Page;
+use futures::StreamExt;
 
 /// Launch browser, restore/create session, acquire WS token.
 pub async fn launch_authenticated(
@@ -225,9 +230,53 @@ async fn check_session_valid(page: &Page, base_url: &str) -> bool {
     }
 }
 
+/// Intercept the Microsoft `authorize` navigation and append `prompt=login` before it is
+/// ever sent. On shared/managed Windows machines Edge injects an OS-level token (WAM/PRT)
+/// into the first authorize request and Microsoft silently signs in a cached account. A
+/// reactive URL check can't win that race — by the time we observe a URL the redirect has
+/// already bounced back. `prompt=login` forces the IdP to show the credential page even
+/// when a valid SSO token is presented, and the IdP honors it regardless of device policy.
+async fn force_account_prompt(page: &Page) -> tokio::task::JoinHandle<()> {
+    let pattern = RequestPattern::builder()
+        .url_pattern("*login.microsoftonline.com*authorize*")
+        .request_stage(RequestStage::Request)
+        .build();
+    if page
+        .execute(FetchEnable::builder().pattern(pattern).build())
+        .await
+        .is_err()
+    {
+        return tokio::spawn(async {});
+    }
+    let Ok(mut paused) = page.event_listener::<EventRequestPaused>().await else {
+        return tokio::spawn(async {});
+    };
+    let page = page.clone();
+    tokio::spawn(async move {
+        while let Some(ev) = paused.next().await {
+            let url = &ev.request.url;
+            let cmd = if url.contains("prompt=") {
+                None
+            } else {
+                let sep = if url.contains('?') { "&" } else { "?" };
+                ContinueRequestParams::builder()
+                    .request_id(ev.request_id.clone())
+                    .url(format!("{url}{sep}prompt=login"))
+                    .build()
+                    .ok()
+            };
+            let cmd = cmd.unwrap_or_else(|| ContinueRequestParams::new(ev.request_id.clone()));
+            let _ = page.execute(cmd).await;
+        }
+    })
+}
+
 /// Perform Microsoft OAuth login flow.
 async fn perform_login(page: &Page, base_url: &str, log: &Logger) -> anyhow::Result<()> {
     log.info("Starting Microsoft OAuth login...");
+
+    // Force a fresh account prompt so Edge can't silently reuse a cached OS account.
+    let interceptor = force_account_prompt(page).await;
 
     page.goto(&format!("{}/login/index.php", base_url))
         .await
@@ -248,11 +297,14 @@ async fn perform_login(page: &Page, base_url: &str, log: &Logger) -> anyhow::Res
             }
         }
         if tokio::time::Instant::now() > deadline {
+            interceptor.abort();
             anyhow::bail!("Login timed out waiting for redirect.");
         }
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
+    let _ = page.execute(FetchDisable::default()).await;
+    interceptor.abort();
     log.success("Login completed successfully.");
     Ok(())
 }
