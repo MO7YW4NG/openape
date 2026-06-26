@@ -150,7 +150,7 @@ pub async fn save_video_progress_api(
         "currenttime" => duration,
         "duration" => duration,
         "percent" => 100,
-        "mapa" => build_duration_map(duration),
+        "map" => build_duration_map(duration),
     );
 
     let result = moodle_api_call(
@@ -215,6 +215,57 @@ pub struct VideoMetadata {
     pub youtube_ids: Vec<String>,
     pub view_id: Option<u64>,
     pub duration: u64,
+}
+
+/// Extract view_id and basic metadata from a supervideo page via HTTP (no browser).
+pub async fn get_video_metadata_http(
+    client: &Client,
+    _session: &SessionInfo,
+    activity_url: &str,
+    log: &Logger,
+) -> anyhow::Result<VideoMetadata> {
+    let html = client
+        .get(activity_url)
+        .send()
+        .await
+        .map_err(|e| anyhow::anyhow!("HTTP fetch failed: {}", e))?
+        .text()
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to read response: {}", e))?;
+
+    if html.contains("login") && html.contains("microsoftonline") {
+        anyhow::bail!("Session invalid — redirected to login page");
+    }
+
+    let view_id_re1 = regex::Regex::new(r"player_create.*?amd\.\w+\((\d+)").unwrap();
+    let view_id_re2 = regex::Regex::new(r#"view_id['":\s]+(\d+)"#).unwrap();
+    let view_id = view_id_re1
+        .captures(&html)
+        .or_else(|| view_id_re2.captures(&html))
+        .and_then(|c| c[1].parse::<u64>().ok());
+
+    let duration_re = regex::Regex::new(r#"["']?duration["']?\s*[:=]\s*(\d+)"#).unwrap();
+    let duration = duration_re
+        .captures(&html)
+        .and_then(|c| c[1].parse::<u64>().ok())
+        .unwrap_or_else(|| {
+            log.debug("Duration unknown (HTTP fetch), using 600s");
+            600
+        });
+
+    log.debug(&format!(
+        "view_id={:?}, duration={}s (HTTP)",
+        view_id, duration
+    ));
+
+    let (video_sources, youtube_ids) = extract_video_sources_from_html(&html, log);
+
+    Ok(VideoMetadata {
+        video_sources,
+        youtube_ids,
+        view_id,
+        duration,
+    })
 }
 
 /// Extract video sources and YouTube IDs from HTML content.

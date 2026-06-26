@@ -4,7 +4,8 @@ use crate::moodle::course::get_enrolled_courses_api;
 use crate::moodle::types::SuperVideoModule;
 use crate::moodle::video::{
     download_video_with_cookies, get_incomplete_videos_api, get_supervideos_in_course_api,
-    get_video_metadata_browser, save_video_progress_api, update_completion_status, VideoMetadata,
+    get_video_metadata_browser, get_video_metadata_http, save_video_progress_api,
+    update_completion_status, VideoMetadata,
 };
 use crate::output::format_and_output;
 use crate::utils::sanitize_filename;
@@ -79,25 +80,25 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 return Ok(());
             }
 
-            // Launch browser only for getting metadata
-            let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
-            let launched = crate::auth::launch_persistent_session(&config, &ctx.log, true).await?;
-
             let mut completed = 0;
             for v in &videos {
                 ctx.log.info(&format!("Processing: {}", v.name));
 
-                // 1. Get metadata via browser
-                let metadata =
-                    match get_video_metadata_browser(&launched.page, &v.url, &ctx.log).await {
-                        Ok(m) => m,
-                        Err(e) => {
-                            ctx.log.warn(&format!("  Failed to get metadata: {}", e));
-                            continue;
-                        }
-                    };
+                let metadata = match get_video_metadata_http(
+                    &ctx.client,
+                    &ctx.session,
+                    &v.url,
+                    &ctx.log,
+                )
+                .await
+                {
+                    Ok(m) => m,
+                    Err(e) => {
+                        ctx.log.warn(&format!("  Failed to get metadata: {}", e));
+                        continue;
+                    }
+                };
 
-                // 2. Complete via API
                 match complete_video(&ctx, v, &metadata).await {
                     Ok(()) => {
                         ctx.log.success(&format!("  Completed: {}", v.name));
@@ -109,8 +110,6 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                     }
                 }
             }
-
-            crate::auth::close_persistent_session(launched).await;
             ctx.log
                 .info(&format!("Completed {}/{} videos", completed, total));
             let result = serde_json::json!({
@@ -181,21 +180,24 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 return Ok(());
             }
 
-            let config = load_config(cli.config.as_ref().and_then(|p| p.parent()));
-            let launched = crate::auth::launch_persistent_session(&config, &ctx.log, true).await?;
-
             let mut completed = 0;
             for (cname, v) in &all_incomplete {
                 ctx.log.info(&format!("Processing [{}]: {}", cname, v.name));
 
-                let metadata =
-                    match get_video_metadata_browser(&launched.page, &v.url, &ctx.log).await {
-                        Ok(m) => m,
-                        Err(e) => {
-                            ctx.log.warn(&format!("  Failed to get metadata: {}", e));
-                            continue;
-                        }
-                    };
+                let metadata = match get_video_metadata_http(
+                    &ctx.client,
+                    &ctx.session,
+                    &v.url,
+                    &ctx.log,
+                )
+                .await
+                {
+                    Ok(m) => m,
+                    Err(e) => {
+                        ctx.log.warn(&format!("  Failed to get metadata: {}", e));
+                        continue;
+                    }
+                };
 
                 match complete_video(&ctx, v, &metadata).await {
                     Ok(()) => {
@@ -208,8 +210,6 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                     }
                 }
             }
-
-            crate::auth::close_persistent_session(launched).await;
             ctx.log
                 .info(&format!("Completed {}/{} videos", completed, total));
             let result = serde_json::json!({
