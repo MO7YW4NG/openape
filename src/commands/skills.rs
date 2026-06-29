@@ -2,8 +2,7 @@ use anyhow::{Context, Result};
 use std::path::PathBuf;
 
 const SKILL_NAME: &str = "openape";
-const GITHUB_RAW_URL: &str =
-    "https://raw.githubusercontent.com/mo7yw4ng/openape/refs/heads/main/skills/openape/SKILL.md";
+const BUNDLED_SKILL: &str = include_str!("../../skills/openape/SKILL.md");
 
 struct Platform {
     name: &'static str,
@@ -37,49 +36,12 @@ fn platforms() -> Vec<(&'static str, Platform)> {
     ]
 }
 
-/// Try local project path, then next to the executable, then fallback to GitHub.
+/// Return the skill bundled at compile time.
 async fn read_skill_content() -> Result<String> {
-    let candidates = [
-        // CWD (dev mode / project root)
-        std::env::current_dir()
-            .unwrap_or_default()
-            .join("skills")
-            .join(SKILL_NAME)
-            .join("SKILL.md"),
-        // Next to the executable (npm installed binary)
-        std::env::current_exe()
-            .ok()
-            .and_then(|exe| {
-                exe.parent()
-                    .map(|p| p.join("skills").join(SKILL_NAME).join("SKILL.md"))
-            })
-            .unwrap_or_default(),
-    ];
-
-    for path in &candidates {
-        if let Ok(content) = tokio::fs::read_to_string(path).await {
-            if !content.trim().is_empty() {
-                return Ok(content);
-            }
-        }
+    if BUNDLED_SKILL.trim().is_empty() {
+        anyhow::bail!("Bundled skill is empty");
     }
-
-    let client = reqwest::Client::builder()
-        .user_agent("openape-cli")
-        .build()?;
-    let resp = client
-        .get(GITHUB_RAW_URL)
-        .send()
-        .await
-        .with_context(|| "Failed to fetch skill from GitHub")?;
-
-    if !resp.status().is_success() {
-        anyhow::bail!("Failed to fetch skill from GitHub: {}", resp.status());
-    }
-
-    resp.text()
-        .await
-        .with_context(|| "Failed to read response body")
+    Ok(BUNDLED_SKILL.to_string())
 }
 
 pub async fn run(cmd: &crate::SkillsCommands, cli: &crate::Cli) -> Result<()> {
@@ -160,5 +122,16 @@ pub async fn run(cmd: &crate::SkillsCommands, cli: &crate::Cli) -> Result<()> {
             format_and_output(&[result], cli.output, None);
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_skill_is_present() {
+        assert!(BUNDLED_SKILL.contains("name: openape"));
+        assert!(BUNDLED_SKILL.contains("openape <command>"));
     }
 }
