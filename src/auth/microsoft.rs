@@ -2,16 +2,21 @@ use anyhow::Context;
 use chromiumoxide::cdp::browser_protocol::input::InsertTextParams;
 use chromiumoxide::Page;
 use std::time::Duration;
+use zeroize::Zeroizing;
 
-use crate::auth::credentials::StoredCredentials;
 use crate::logger::Logger;
 
 const SUBMIT_BUTTON_SELECTOR: &str = "#idSIButton9";
 const STAY_SIGNED_IN_YES: &str = "#idSIButton9";
 const STAY_SIGNED_IN_ACCEPT: &str = "#idBtn_Accept";
 
-const _EMAIL_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
 const PASSWORD_WAIT_TIMEOUT: Duration = Duration::from_secs(8);
+
+#[derive(Debug, thiserror::Error)]
+#[error("Authentication session exchange failed (page: {location}).")]
+pub(super) struct SessionExchangeError {
+    location: String,
+}
 
 /// Check if an element exists in the live DOM via JavaScript.
 async fn js_element_exists(page: &Page, selector: &str) -> bool {
@@ -56,11 +61,13 @@ async fn js_fill_input(
     _log: &Logger,
 ) -> anyhow::Result<()> {
     let escaped_selector = selector.replace('\'', "\\'");
-    let escaped_value = value
-        .replace('\\', "\\\\")
-        .replace('\'', "\\'")
-        .replace('\n', "\\n");
-    let js = format!(
+    let escaped_value = Zeroizing::new(
+        value
+            .replace('\\', "\\\\")
+            .replace('\'', "\\'")
+            .replace('\n', "\\n"),
+    );
+    let js = Zeroizing::new(format!(
         r#"(function() {{
             const el = document.querySelector('{}');
             if (!el) return 'NOT_FOUND';
@@ -86,12 +93,15 @@ async fn js_fill_input(
             el.blur();
             return 'OK';
         }})()"#,
-        escaped_selector, escaped_value, escaped_value, escaped_value
-    );
+        escaped_selector,
+        escaped_value.as_str(),
+        escaped_value.as_str(),
+        escaped_value.as_str()
+    ));
     let result = page
-        .evaluate(js)
+        .evaluate(js.as_str())
         .await
-        .context("Failed to evaluate fill-input JS")?;
+        .map_err(|_| anyhow::anyhow!("Failed to fill authentication input"))?;
     let status = result
         .value()
         .and_then(|v| v.as_str().map(String::from))
@@ -147,8 +157,45 @@ async fn cdp_insert_text_input(
 
     page.execute(InsertTextParams::new(value))
         .await
-        .context("Failed to insert text via CDP")?;
+        .map_err(|_| anyhow::anyhow!("Failed to fill authentication input"))?;
     Ok(())
+}
+
+/// Return true if the given input currently holds a non-empty value. Only reads the length,
+/// never the secret itself, back out of the page.
+async fn input_has_value(page: &Page, selector: &str) -> bool {
+    let escaped = selector.replace('\'', "\\'");
+    let js = format!(
+        r#"(function() {{
+            const el = document.querySelector('{escaped}');
+            return !!(el && el.value && el.value.length > 0);
+        }})()"#
+    );
+    page.evaluate(js)
+        .await
+        .ok()
+        .and_then(|v| v.value().and_then(|v| v.as_bool()))
+        .unwrap_or(false)
+}
+
+/// Fill the Microsoft password field and verify the value actually landed. CDP `insertText`
+/// silently no-ops on some tenants (field stays empty, submit fails with "Please enter your
+/// password"), so fall back to the JS value-setter that already works for the email field.
+async fn fill_password_field(page: &Page, password: &str, log: &Logger) -> anyhow::Result<()> {
+    for selector in ["input[name='passwd']", "input[type='password']"] {
+        if !js_element_exists(page, selector).await {
+            continue;
+        }
+        let _ = cdp_insert_text_input(page, selector, password, log).await;
+        if input_has_value(page, selector).await {
+            return Ok(());
+        }
+        let _ = js_fill_input(page, selector, password, log).await;
+        if input_has_value(page, selector).await {
+            return Ok(());
+        }
+    }
+    anyhow::bail!("Failed to enter the password into the Microsoft sign-in form.");
 }
 
 /// Click an element via JavaScript.
@@ -210,12 +257,7 @@ async fn js_wait_for_element(
             }
         }
         if tokio::time::Instant::now() > deadline {
-            let current_url = page.url().await.ok().flatten().unwrap_or_default();
-            anyhow::bail!(
-                "Timed out waiting for element: {} (URL: {})",
-                selector,
-                current_url
-            );
+            anyhow::bail!("Timed out waiting for element: {}", selector);
         }
         tokio::time::sleep(Duration::from_millis(200)).await;
     }
@@ -247,8 +289,7 @@ async fn wait_for_password_page(
             anyhow::bail!("STAY_SIGNED_IN");
         }
         if tokio::time::Instant::now() > deadline {
-            let current_url = page.url().await.ok().flatten().unwrap_or_default();
-            anyhow::bail!("Timed out waiting for password page (URL: {})", current_url);
+            anyhow::bail!("Timed out waiting for password page");
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
     }
@@ -264,56 +305,9 @@ async fn wait_for_email_page(page: &Page, timeout: Duration, _log: &Logger) -> a
             return Ok(());
         }
         if tokio::time::Instant::now() > deadline {
-            let current_url = page.url().await.ok().flatten().unwrap_or_default();
-            anyhow::bail!("Timed out waiting for email input (URL: {})", current_url);
+            anyhow::bail!("Timed out waiting for email input");
         }
         tokio::time::sleep(Duration::from_millis(150)).await;
-    }
-}
-
-/// Wait until the page URL stops containing redirect keywords.
-#[allow(dead_code)]
-async fn wait_for_redirect_settle(page: &Page, base_url: &str, log: &Logger) -> anyhow::Result<()> {
-    let base_domain = base_url.replace("https://", "").replace("http://", "");
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    let mut last_url = String::new();
-    let mut stable_count = 0u32;
-    loop {
-        if let Ok(Some(url)) = page.url().await {
-            // Success: we're on the Moodle domain and no longer on Microsoft login pages
-            if url.contains(&base_domain) && !url.contains("microsoftonline") {
-                // Count how many times we've seen the same URL — if stable for 3s, accept it
-                if url == last_url {
-                    stable_count += 1;
-                    if stable_count >= 6 {
-                        log.debug(&format!("Page settled on Moodle URL: {}", url));
-                        return Ok(());
-                    }
-                } else {
-                    stable_count = 0;
-                    log.debug(&format!("Redirect detected, current URL: {}", url));
-                    last_url = url.clone();
-                }
-                // Also accept immediately if it's clearly the Moodle dashboard
-                if url.contains("/my/") || url.contains("/course/") {
-                    return Ok(());
-                }
-            } else {
-                stable_count = 0;
-                if url != last_url {
-                    log.debug(&format!("Redirect detected, current URL: {}", url));
-                    last_url = url.clone();
-                }
-            }
-        }
-        if tokio::time::Instant::now() > deadline {
-            let final_url = page.url().await.ok().flatten().unwrap_or_default();
-            anyhow::bail!(
-                "Timed out waiting for redirect to settle. Final URL: {}",
-                final_url
-            );
-        }
-        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 }
 
@@ -358,6 +352,32 @@ async fn page_contains_text(page: &Page, text: &str) -> bool {
         .unwrap_or(false)
 }
 
+/// Read the visible error Microsoft shows on the sign-in page (wrong password, locked
+/// account, "can't sign in here", etc.) so we surface the real reason instead of a generic
+/// message. Returns None if no error element is populated.
+async fn microsoft_error_text(page: &Page) -> Option<String> {
+    let js = r#"(function() {
+        const ids = ['passwordError', 'usernameError'];
+        for (const id of ids) {
+            const el = document.getElementById(id);
+            if (el && el.innerText && el.innerText.trim()) return el.innerText.trim();
+        }
+        for (const el of document.querySelectorAll('[role="alert"], #idTD_Error, .alert-error')) {
+            const t = el.innerText ? el.innerText.trim() : '';
+            if (t) return t;
+        }
+        return '';
+    })()"#;
+    let text = page
+        .evaluate(js)
+        .await
+        .ok()
+        .and_then(|v| v.value().and_then(|v| v.as_str().map(String::from)))
+        .unwrap_or_default();
+    let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    (!text.is_empty()).then_some(text)
+}
+
 async fn force_microsoft_login_prompt(page: &Page, log: &Logger) -> anyhow::Result<()> {
     let Some(url) = page.url().await.ok().flatten() else {
         return Ok(());
@@ -371,7 +391,7 @@ async fn force_microsoft_login_prompt(page: &Page, log: &Logger) -> anyhow::Resu
     log.info("Forcing Microsoft credential prompt for the requested account...");
     page.goto(&forced_url)
         .await
-        .context("Failed to force Microsoft login prompt")?;
+        .map_err(|_| anyhow::anyhow!("Failed to force Microsoft login prompt"))?;
     let _ = page.wait_for_navigation().await;
     tokio::time::sleep(Duration::from_millis(250)).await;
     Ok(())
@@ -423,21 +443,32 @@ async fn verify_moodle_dashboard(page: &Page, base_url: &str, log: &Logger) -> a
     let dashboard_url = format!("{}/my/", base_url);
     let _ = page.goto(&dashboard_url).await;
     let _ = page.wait_for_navigation().await;
-    tokio::time::sleep(Duration::from_millis(250)).await;
-
-    if let Ok(Some(url)) = page.url().await {
-        if url.contains(&base_domain) && !url.contains("login") && !url.contains("microsoftonline")
-        {
-            log.success("Headless login completed successfully.");
-            return Ok(());
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Ok(Some(url)) = page.url().await {
+            if url.contains(&base_domain)
+                && !url.contains("login")
+                && !url.contains("microsoftonline")
+            {
+                log.success("Headless login completed successfully.");
+                return Ok(());
+            }
         }
+        if tokio::time::Instant::now() > deadline {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(250)).await;
     }
 
-    let current_url = page.url().await.ok().flatten().unwrap_or_default();
-    anyhow::bail!(
-        "Authentication failed. Still on login page after all steps. URL: {}",
-        current_url
-    )
+    let location = page
+        .url()
+        .await
+        .ok()
+        .flatten()
+        .and_then(|url| reqwest::Url::parse(&url).ok())
+        .map(|url| format!("{}{}", url.host_str().unwrap_or("unknown"), url.path()))
+        .unwrap_or_else(|| "unknown".to_string());
+    Err(SessionExchangeError { location }.into())
 }
 
 async fn handle_stay_signed_in_prompt(page: &Page, log: &Logger) -> anyhow::Result<bool> {
@@ -486,12 +517,7 @@ async fn complete_password_login(
         "Timed out waiting for password input (MFA may be required, or the account may not exist)",
     )?;
     tokio::time::sleep(Duration::from_millis(800)).await;
-    if cdp_insert_text_input(page, "input[name='passwd']", password, log)
-        .await
-        .is_err()
-    {
-        cdp_insert_text_input(page, "input[type='password']", password, log).await?;
-    }
+    fill_password_field(page, password, log).await?;
     wait_for_sign_in_button_ready(page, Duration::from_secs(5)).await?;
 
     log.info("Clicking Sign in...");
@@ -508,6 +534,12 @@ async fn complete_password_login(
         .context("Failed to click Sign in button")?;
 
     let _ = handle_stay_signed_in_prompt(page, log).await?;
+    if auth_input_visible(page).await {
+        match microsoft_error_text(page).await {
+            Some(reason) => anyhow::bail!("Microsoft sign-in rejected the credentials: {reason}"),
+            None => anyhow::bail!("Microsoft sign-in did not accept the stored credentials."),
+        }
+    }
     verify_moodle_dashboard(page, base_url, log).await
 }
 
@@ -515,12 +547,14 @@ async fn complete_password_login(
 pub async fn perform_headless_login(
     page: &Page,
     base_url: &str,
-    credentials: &StoredCredentials,
+    student_id: &str,
+    password: &str,
     log: &Logger,
 ) -> anyhow::Result<()> {
     log.info("Starting headless Microsoft OAuth login...");
 
     let base_domain = base_url.replace("https://", "").replace("http://", "");
+    let email = Zeroizing::new(format!("{student_id}@o365st.cycu.edu.tw"));
 
     // Step 1: Navigate to Moodle login page to trigger SSO redirect
     page.goto(&format!("{}/login/index.php", base_url))
@@ -541,7 +575,7 @@ pub async fn perform_headless_login(
                 return Ok(());
             }
             if url.contains("microsoftonline") {
-                log.info(&format!("Reached Microsoft login page: {}", url));
+                log.info("Reached Microsoft login page.");
                 force_microsoft_login_prompt(page, log).await?;
                 break;
             }
@@ -561,12 +595,7 @@ pub async fn perform_headless_login(
         .unwrap_or_default()
         .contains("microsoftonline")
     {
-        if let Ok(Some(url)) = page.url().await {
-            log.info(&format!(
-                "Still on Moodle page: {}. Looking for SSO login button...",
-                url
-            ));
-        }
+        log.info("Looking for the Moodle SSO login button...");
 
         let sso_selectors: &[&str] = &[
             "a[href*='auth/oidc']",
@@ -621,17 +650,13 @@ pub async fn perform_headless_login(
                     );
                 }
                 if url.contains("microsoftonline") {
-                    log.info(&format!("Reached Microsoft login page: {}", url));
+                    log.info("Reached Microsoft login page.");
                     force_microsoft_login_prompt(page, log).await?;
                     break;
                 }
             }
             if tokio::time::Instant::now() > retry_deadline {
-                let current_url = page.url().await.ok().flatten().unwrap_or_default();
-                anyhow::bail!(
-                    "Timed out waiting for redirect to Microsoft login page. Current URL: {}",
-                    current_url
-                );
+                anyhow::bail!("Timed out waiting for redirect to Microsoft login page.");
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
@@ -664,8 +689,7 @@ pub async fn perform_headless_login(
     if !on_email_page && has_account_tiles {
         // Account picker page
         log.info("Account picker page detected. Looking for saved account...");
-        let email = credentials.email();
-        let click_js = format!(
+        let click_js = Zeroizing::new(format!(
             r#"(function() {{
                 const tiles = document.querySelectorAll('[data-test-id]');
                 for (const tile of tiles) {{
@@ -691,20 +715,21 @@ pub async fn perform_headless_login(
                 }}
                 return 'NOT_FOUND';
             }})()"#,
-            email, email, email, email, email
-        );
+            email.as_str(),
+            email.as_str(),
+            email.as_str(),
+            email.as_str(),
+            email.as_str()
+        ));
         let clicked = page
-            .evaluate(click_js)
+            .evaluate(click_js.as_str())
             .await
             .ok()
             .and_then(|v| v.value().and_then(|v| v.as_str().map(String::from)))
             .unwrap_or_default();
 
         if clicked != "NOT_FOUND" {
-            log.info(&format!(
-                "Clicked saved account tile for {} ({})",
-                email, clicked
-            ));
+            log.info(&format!("Clicked matching saved account tile ({clicked})."));
 
             // Poll for next state instead of fixed sleep
             let after_click_deadline = tokio::time::Instant::now() + Duration::from_secs(6);
@@ -739,16 +764,16 @@ pub async fn perform_headless_login(
 
             if on_password {
                 log.info("Password page reached after account tile click.");
-                complete_password_login(page, base_url, &credentials.password, log).await?;
+                complete_password_login(page, base_url, password, log).await?;
                 return Ok(());
             } else if on_email {
                 // Account tile click took us to email input — fill it
-                log.info(&format!("Entering email: {}...", credentials.email()));
-                if js_fill_input(page, "input[name='loginfmt']", &credentials.email(), log)
+                log.info("Entering Microsoft account...");
+                if js_fill_input(page, "input[name='loginfmt']", email.as_str(), log)
                     .await
                     .is_err()
                 {
-                    js_fill_input(page, "input[type='email']", &credentials.email(), log).await?;
+                    js_fill_input(page, "input[type='email']", email.as_str(), log).await?;
                 }
             }
         } else {
@@ -788,8 +813,7 @@ pub async fn perform_headless_login(
                         );
                     }
                     anyhow::bail!(
-                        "Clicked 'Use another account' but Microsoft email input did not appear. Current URL: {}. {}",
-                        current_url,
+                        "Clicked 'Use another account' but Microsoft email input did not appear: {}",
                         e
                     );
                 }
@@ -804,10 +828,7 @@ pub async fn perform_headless_login(
                         "Microsoft returned to Moodle before the requested account was selected."
                     );
                 }
-                anyhow::bail!(
-                    "Account tile not found and could not click 'Use another account'. Current URL: {}",
-                    current_url
-                );
+                anyhow::bail!("Account tile not found and could not click 'Use another account'.");
             }
         }
     }
@@ -816,12 +837,12 @@ pub async fn perform_headless_login(
     let on_email_page = js_element_exists(page, "input[name='loginfmt']").await
         || js_element_exists(page, "input[type='email']").await;
     if on_email_page {
-        log.info(&format!("Entering email: {}...", credentials.email()));
-        if js_fill_input(page, "input[name='loginfmt']", &credentials.email(), log)
+        log.info("Entering Microsoft account...");
+        if js_fill_input(page, "input[name='loginfmt']", email.as_str(), log)
             .await
             .is_err()
         {
-            js_fill_input(page, "input[type='email']", &credentials.email(), log).await?;
+            js_fill_input(page, "input[type='email']", email.as_str(), log).await?;
         }
 
         // Step 4: Click "Next" then poll for password page
@@ -855,12 +876,8 @@ pub async fn perform_headless_login(
     let on_password_page = js_element_exists(page, "input[name='passwd']").await
         || js_element_exists(page, "input[type='password']").await;
     if !on_password_page {
-        let current_url = page.url().await.ok().flatten().unwrap_or_default();
-        anyhow::bail!(
-            "Microsoft login did not reach email or password page. Current URL: {}",
-            current_url
-        );
+        anyhow::bail!("Microsoft login did not reach email or password page.");
     }
 
-    complete_password_login(page, base_url, &credentials.password, log).await
+    complete_password_login(page, base_url, password, log).await
 }
