@@ -1,67 +1,94 @@
-use base64::{engine::general_purpose::STANDARD, Engine};
-use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use anyhow::Context;
+use zeroize::Zeroize;
 
-/// Stored credentials for headless re-login.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+const SERVICE: &str = "openape";
+const ACCOUNT: &str = "moodle-auto-login";
+
 pub struct StoredCredentials {
     pub id: String,
-    #[serde(
-        serialize_with = "serialize_password",
-        deserialize_with = "deserialize_password"
-    )]
     pub password: String,
 }
 
-fn serialize_password<S: serde::Serializer>(pw: &str, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_str(&STANDARD.encode(pw.as_bytes()))
-}
-
-fn deserialize_password<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
-    let encoded = String::deserialize(d)?;
-    STANDARD
-        .decode(&encoded)
-        .map_err(|e| serde::de::Error::custom(format!("invalid base64: {e}")))
-        .and_then(|bytes| {
-            String::from_utf8(bytes)
-                .map_err(|e| serde::de::Error::custom(format!("invalid utf8: {e}")))
-        })
-}
-
 impl StoredCredentials {
-    pub fn email(&self) -> String {
-        format!("{}@o365st.cycu.edu.tw", self.id)
+    pub fn new(mut id: String, mut password: String) -> anyhow::Result<Self> {
+        if id.trim().is_empty() || password.is_empty() {
+            id.zeroize();
+            password.zeroize();
+            anyhow::bail!("Student ID and password must not be empty.");
+        }
+
+        let normalized_id = id.trim().to_owned();
+        id.zeroize();
+        Ok(Self {
+            id: normalized_id,
+            password,
+        })
     }
 
-    pub fn path(auth_state_path: &str) -> PathBuf {
-        let path = Path::new(auth_state_path);
-        let dir = path.parent().unwrap_or(Path::new(".auth"));
-        dir.join("credentials.json")
+    fn entry() -> anyhow::Result<keyring::Entry> {
+        keyring::Entry::new(SERVICE, ACCOUNT).context("Failed to open OS credential store")
     }
 
-    pub fn load(auth_state_path: &str) -> Option<Self> {
-        let path = Self::path(auth_state_path);
-        if !path.exists() {
-            return None;
-        }
-        let content = std::fs::read_to_string(&path).ok()?;
-        serde_json::from_str(&content).ok()
+    fn encode(&self) -> anyhow::Result<String> {
+        serde_json::to_string(&(&self.id, &self.password)).context("Failed to encode credentials")
     }
 
-    pub fn save(&self, auth_state_path: &str) {
-        let path = Self::path(auth_state_path);
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(json) = serde_json::to_string_pretty(self) {
-            let _ = std::fs::write(&path, json);
+    fn decode(payload: &str) -> anyhow::Result<Self> {
+        let (id, password): (String, String) =
+            serde_json::from_str(payload).context("Invalid credential store payload")?;
+        Self::new(id, password)
+    }
+
+    pub fn load() -> anyhow::Result<Option<Self>> {
+        match Self::entry()?.get_password() {
+            Ok(mut payload) => {
+                let result = Self::decode(&payload).map(Some);
+                payload.zeroize();
+                result
+            }
+            Err(keyring::Error::NoEntry) => Ok(None),
+            Err(error) => Err(error).context("Failed to read OS credential store"),
         }
     }
 
-    pub fn delete(auth_state_path: &str) {
-        let path = Self::path(auth_state_path);
-        if path.exists() {
-            let _ = std::fs::remove_file(path);
+    pub fn save(&self) -> anyhow::Result<()> {
+        let mut payload = self.encode()?;
+        let result = match Self::entry() {
+            Ok(entry) => entry
+                .set_password(&payload)
+                .context("Failed to save credentials to OS credential store"),
+            Err(error) => Err(error),
+        };
+        payload.zeroize();
+        result
+    }
+
+    pub fn delete() -> anyhow::Result<()> {
+        match Self::entry()?.delete_credential() {
+            Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+            Err(error) => Err(error).context("Failed to delete OS credential"),
         }
+    }
+}
+
+impl Drop for StoredCredentials {
+    fn drop(&mut self) {
+        self.id.zeroize();
+        self.password.zeroize();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StoredCredentials;
+
+    #[test]
+    fn credential_payload_round_trips_special_characters() {
+        let credentials =
+            StoredCredentials::new("11234567".into(), "p@ss\"\\\nword".into()).unwrap();
+        let decoded = StoredCredentials::decode(&credentials.encode().unwrap()).unwrap();
+
+        assert_eq!(decoded.id, credentials.id);
+        assert_eq!(decoded.password, credentials.password);
     }
 }

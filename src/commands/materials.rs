@@ -650,17 +650,20 @@ async fn download_resources(
             format!("{}?token={}", resource.url, ws_token)
         };
 
-        ctx.log.debug(&format!("  Downloading: {}", url));
+        ctx.log.debug(&format!(
+            "  Downloading: {} -> {}",
+            resource.name,
+            dest.display()
+        ));
         match ctx.client.get(&url).send().await {
             Ok(resp) if resp.status().is_success() => {
                 let bytes = resp.bytes().await?;
                 // Validate: PDF files should start with %PDF, reject JSON error responses
                 if filename.ends_with(".pdf") && !bytes.starts_with(b"%PDF") {
-                    let preview = String::from_utf8_lossy(&bytes);
                     ctx.log.warn(&format!(
-                        "  Invalid PDF: {} ({})",
+                        "  Invalid PDF: {} ({} bytes)",
                         resource.name,
-                        &preview[..preview.len().min(80)]
+                        bytes.len()
                     ));
                     summary.files.push(serde_json::json!({
                         "name": resource.name,
@@ -694,6 +697,7 @@ async fn download_resources(
                 summary.failed += 1;
             }
             Err(e) => {
+                let e = e.without_url();
                 ctx.log
                     .warn(&format!("  Download failed for {}: {}", resource.name, e));
                 summary.files.push(serde_json::json!({

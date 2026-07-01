@@ -47,8 +47,15 @@ pub fn sanitize_filename(name: &str, max_length: usize) -> String {
     let re = Regex::new(r#"[<>:"/\\|?*]"#).unwrap();
     let cleaned = re.replace_all(name, "_");
     let re2 = Regex::new(r"\s+").unwrap();
-    let result = re2.replace_all(&cleaned, "_");
-    result.chars().take(max_length).collect()
+    let result: String = re2
+        .replace_all(&cleaned, "_")
+        .chars()
+        .take(max_length)
+        .collect();
+    match result.as_str() {
+        "" | "." | ".." => "_".to_string(),
+        _ => result,
+    }
 }
 
 /// Format file size to KB.
@@ -186,4 +193,18 @@ pub fn parse_saved_answer(html: &str) -> Option<serde_json::Value> {
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_filename;
+
+    #[test]
+    fn sanitize_filename_replaces_unsafe_components() {
+        assert_eq!(sanitize_filename("", 100), "_");
+        assert_eq!(sanitize_filename(".", 100), "_");
+        assert_eq!(sanitize_filename("..", 100), "_");
+        assert_eq!(sanitize_filename("name", 100), "name");
+        assert_eq!(sanitize_filename("folder/file", 100), "folder_file");
+    }
 }

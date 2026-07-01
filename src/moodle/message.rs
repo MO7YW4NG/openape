@@ -21,7 +21,7 @@ pub async fn get_messages_api(
         args.insert("useridfrom".to_string(), serde_json::json!(from));
     }
     if let Some(r) = read {
-        args.insert("read".to_string(), serde_json::json!(r));
+        args.insert("read".to_string(), serde_json::json!(if r { 1 } else { 0 }));
     }
     if let Some(limit) = limit_num {
         args.insert("limitnum".to_string(), serde_json::json!(limit));
@@ -58,6 +58,10 @@ pub async fn get_messages_api(
                 .unwrap_or("")
                 .to_string(),
             timecreated: m.get("timecreated").and_then(|v| v.as_i64()).unwrap_or(0),
+            read: m
+                .get("read")
+                .and_then(|v| v.as_bool().or_else(|| v.as_u64().map(|n| n != 0)))
+                .unwrap_or(false),
         })
         .collect())
 }

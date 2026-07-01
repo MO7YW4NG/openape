@@ -31,17 +31,16 @@ npx @mo7yw4ng/openape --help
 ## 核心指令
 
 ### 登入與驗證 (Authentication)
-第一次使用需先登入，登入成功後會快取 Session，之後可直接執行指令。若 Session 失效，請重新登入。
+第一次使用需先登入，並選擇瀏覽器或終端自動登入。自動登入的帳密會存入作業系統憑證庫，不會寫入參數、環境變數或一般檔案；Session 失效時會自動重登。改選瀏覽器登入或執行 logout 會清除已存帳密。
 ```bash
-openape login          # 手動登入
-openape login --id <student-id> --password <password>  # 登入並儲存帳密 (自動重登)
+openape login          # 有已存帳密時直接自動登入；首次使用才選擇登入方式
 openape status         # 檢查當前登入狀態
 openape logout         # 登出並清除 session
 ```
 
 ### 課程 (Courses)
 ```bash
-openape courses list               # 列出所有課程 (支援 --incomplete-only, --level)
+openape courses list [--level in_progress|past|future|all] # 列出課程
 openape courses info <id>          # 顯示特定課程的詳細資訊
 openape courses progress <id>      # 顯示特定課程的進度
 openape courses syllabus <id>      # 顯示課程大綱
@@ -49,27 +48,28 @@ openape courses syllabus <id>      # 顯示課程大綱
 
 ### 影片 (Videos)
 ```bash
-openape videos list <course-id>      # 列出課程中的影片
-openape videos complete <id>         # 標記特定影片為已觀看
-openape videos complete-all            # 影片批次完成
-openape videos download <id>         # 下載影片 (支援 --output-dir)
+openape videos list <course-id> [--incomplete-only]          # 列出課程中的影片
+openape videos complete <course-id> [--dry-run]              # 完成課程中的所有影片
+openape videos complete-all [--dry-run]                      # 完成所有課程中的未完成影片
+openape videos download <cmid> [--course-id <id>] [--output-dir <path>] # 下載單一影片
+openape videos download-all <course-id> [--output-dir <path>] [--incomplete-only] # 下載課程影片
 ```
 
 ### 測驗與教材 (Quizzes & Materials)
 ```bash
-openape quizzes list <course-id>     # 列出特定課程測驗
-openape quizzes list-all             # 列出所有課程測驗
-openape quizzes start <quiz-id>      # 開始測驗
-openape quizzes info <attempt-id>    # 查看測驗題目
-openape quizzes save <attempt-id> '<answers>' # 儲存測驗答案
-openape quizzes submit <attempt-id>           # 送出目前已儲存的測驗答案
+openape quizzes list <course-id> [--all]                       # 列出特定課程測驗
+openape quizzes list-all [--level in_progress|all] [--all]     # 列出所有課程測驗
+openape quizzes start <quiz-id> [--cmid <cmid>]                # 開始測驗
+openape quizzes info <attempt-id> [--page <number>] [--cmid <cmid>] # 查看測驗題目
+openape quizzes save <attempt-id> '<answers>' [--cmid <cmid>]  # 儲存測驗答案
+openape quizzes submit <attempt-id> [--cmid <cmid>]            # 送出目前已儲存的測驗答案
 openape materials list <course-id>    # 列出指定課程教材
-openape materials list-all           # 列出所有可下載教材
-openape materials download <id>      # 下載指定教材 (支援 --output-dir)
-openape materials download-file <course-id> <query>  # 依檔名/folder/name/cmid 下載單一教材
-openape materials download-all       # 批次下載教材 (支援 --output-dir, --level)
-openape materials complete <id>      # 標記教材為已完成
-openape materials complete-all       # 批次標記教材為已完成
+openape materials list-all [--level in_progress|all]            # 列出所有可下載教材
+openape materials download <course-id> [--output-dir <path>]    # 下載課程所有教材
+openape materials download-file <course-id> <query> [--output-dir <path>] # 下載單一教材
+openape materials download-all [--output-dir <path>] [--level in_progress|past|future|all] # 批次下載教材
+openape materials complete <course-id> [--dry-run]              # 完成課程中的教材
+openape materials complete-all [--dry-run] [--level in_progress|past|future|all] # 批次完成教材
 ```
 
 ### 成績與其他查詢 (Grades, Forums, Calendar)
@@ -77,23 +77,23 @@ openape materials complete-all       # 批次標記教材為已完成
 openape grades summary               # 顯示學期成績總覽
 openape grades course <id>           # 顯示特定課程成績
 openape forums list                  # 列出進行中課程的討論區
-openape forums list-all              # 列出所有討論區
+openape forums list-all [--level in_progress|all] # 列出所有討論區
 openape forums discussions <forum-id>      # 列出討論區中的討論串
 openape forums posts <discussion-id>       # 列出討論串中的貼文
-openape forums reply <post-id> <subject> <message>  # 回覆貼文 (支援 --attachment-id)
-openape forums post <forum-id> <subject> <message>  # 發起新討論
+openape forums reply <post-id> <subject> <message> [--attachment-id <id>] [--inline-attachment-id <id>] # 回覆貼文
+openape forums post <forum-id> <subject> <message> [--subscribe] [--pin] # 發起新討論
 openape forums delete <post-id>      # 刪除討論貼文
-openape announcements list-all       # 列出所有公告
+openape announcements list-all [--unread-only] [--limit <n>] # 列出所有公告
 openape announcements read <id>      # 閱讀特定公告
-openape calendar events              # 查詢行事曆事件 (支援 --upcoming, --days, --course)
-openape calendar export              # 匯出事件 (支援 --output, --days)
+openape calendar events [--upcoming] [--days <n>] [--course <id>] # 查詢行事曆事件
+openape calendar export [--output-file <path>] [--days <n>]      # 匯出事件
 ```
 
 ### 作業與檔案上傳 (Assignments & Upload)
 ```bash
 # 作業查詢與繳交
 openape assignments list <course-id>       # 列出課程作業
-openape assignments list-all               # 列出所有作業 (支援 --level all)
+openape assignments list-all [--level in_progress|all] # 列出所有作業
 openape assignments status <assignment-id> # 檢查作業繳交狀態
 openape assignments submit <assignment-id> # 繳交作業
   --text "內容"                            # 線上文字繳交
@@ -101,7 +101,7 @@ openape assignments submit <assignment-id> # 繳交作業
   --file <path>                            # 直接上傳檔案並繳交
 
 # 檔案上傳至草稿區
-openape upload file <path>                 # 上傳檔案取得 draft ID
+openape upload file <path> [--filename <name>] # 上傳檔案取得 draft ID
 ```
 
 ### 頁面 (Pages)

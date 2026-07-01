@@ -8,7 +8,6 @@ pub struct SessionMeta {
     pub ws_token_timestamp: Option<i64>,
     pub user_id: Option<u64>,
     pub user_agent: Option<String>,
-    pub seb_config_key: Option<String>,
 }
 
 impl SessionMeta {
@@ -24,15 +23,11 @@ impl SessionMeta {
         Self::default()
     }
 
-    pub fn save(&self, auth_state_path: &str) {
+    pub fn save(&self, auth_state_path: &str) -> anyhow::Result<()> {
         let meta_path = Self::meta_path(auth_state_path);
-        if let Some(parent) = Path::new(&meta_path).parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(
-            &meta_path,
-            serde_json::to_string_pretty(self).unwrap_or_default(),
-        );
+        let json = serde_json::to_string_pretty(self)?;
+        super::write_secret_file(Path::new(&meta_path), json.as_bytes())?;
+        Ok(())
     }
 
     pub(crate) fn meta_path(auth_state_path: &str) -> String {

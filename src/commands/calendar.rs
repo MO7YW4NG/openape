@@ -85,7 +85,7 @@ pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
             format_and_output(&items, ctx.output, None);
         }
 
-        crate::CalendarCommands::Export { output, days } => {
+        crate::CalendarCommands::Export { output_file, days } => {
             let now = chrono::Utc::now().timestamp();
             let end_time = now + (*days as i64 * 86400);
 
@@ -147,14 +147,14 @@ pub async fn run(cmd: &crate::CalendarCommands, cli: &Cli) -> Result<()> {
             });
 
             let json_str = serde_json::to_string_pretty(&export_data)?;
-            if let Some(parent) = output.parent() {
+            if let Some(parent) = output_file.parent() {
                 fs::create_dir_all(parent)?;
             }
-            fs::write(output, &json_str)?;
+            fs::write(output_file, &json_str)?;
             ctx.log.success(&format!(
                 "Exported {} events to {}",
                 all_events.len(),
-                output.display()
+                output_file.display()
             ));
         }
     }

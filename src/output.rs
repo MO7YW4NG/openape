@@ -51,12 +51,21 @@ pub fn format_as_csv(data: &[serde_json::Value]) -> String {
                 match val {
                     None | Some(serde_json::Value::Null) => String::new(),
                     Some(v) => {
-                        let s = match v {
-                            serde_json::Value::String(s) => s.clone(),
-                            other => other.to_string(),
+                        let (s, untrusted) = match v {
+                            serde_json::Value::String(s) => (s.clone(), true),
+                            other => (other.to_string(), false),
                         };
-                        let s = s.trim_matches('"').to_string();
-                        if s.contains(',') || s.contains('"') || s.contains('\n') {
+                        let mut s = s.trim_matches('"').to_string();
+                        if untrusted
+                            && matches!(s.chars().next(), Some('=' | '+' | '-' | '@' | '\t' | '\r'))
+                        {
+                            s.insert(0, '\'');
+                        }
+                        if s.contains(',')
+                            || s.contains('"')
+                            || s.contains('\n')
+                            || s.contains('\r')
+                        {
                             format!("\"{}\"", s.replace('"', "\"\""))
                         } else {
                             s
@@ -105,4 +114,32 @@ pub fn format_as_table(data: &[serde_json::Value]) -> String {
     }
 
     table.to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_as_csv;
+
+    #[test]
+    fn csv_neutralizes_formula_prefixes() {
+        for (value, expected) in [
+            ("=SUM(A1:A2)", "'=SUM(A1:A2)"),
+            ("+cmd", "'+cmd"),
+            ("-1+1", "'-1+1"),
+            ("@cmd", "'@cmd"),
+            ("\tcmd", "'\tcmd"),
+            ("\rcmd", "\"'\rcmd\""),
+        ] {
+            let data = [serde_json::json!({ "value": value })];
+            assert_eq!(format_as_csv(&data), format!("value\n{expected}"));
+        }
+    }
+
+    #[test]
+    fn csv_leaves_normal_values_unchanged() {
+        assert_eq!(
+            format_as_csv(&[serde_json::json!({ "value": "notes" })]),
+            "value\nnotes"
+        );
+    }
 }

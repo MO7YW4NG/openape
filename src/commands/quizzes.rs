@@ -106,7 +106,7 @@ pub async fn run(cmd: &crate::QuizzesCommands, cli: &Cli) -> Result<()> {
             }
 
             // Auto-fetch questions like the TS version
-            match get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, attempt.attemptid, None)
+            match get_all_quiz_attempt_data_api(&ctx.client, &ctx.session, attempt.attemptid, *cmid)
                 .await
             {
                 Ok(data) => {

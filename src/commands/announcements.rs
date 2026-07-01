@@ -1,5 +1,4 @@
 use super::ApiCtx;
-use crate::moodle::forum::get_discussion_posts_api;
 use crate::moodle::message::get_messages_api;
 use crate::output::format_and_output;
 use crate::utils::format_moodle_date;
@@ -24,7 +23,6 @@ pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
             let mut items: Vec<serde_json::Value> = messages
                 .iter()
                 .map(|m| {
-                    let unread = m.timecreated > 0; // Moodle core_message_get_messages with read=false only returns unread
                     serde_json::json!({
                         "course_id": 0,
                         "course_name": "Notifications",
@@ -33,7 +31,7 @@ pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
                         "author": format!("User {}", m.useridfrom),
                         "author_id": m.useridfrom,
                         "created_at": format_moodle_date(Some(m.timecreated)),
-                        "unread": unread,
+                        "unread": !m.read,
                     })
                 })
                 .collect();
@@ -53,22 +51,26 @@ pub async fn run(cmd: &crate::AnnouncementsCommands, cli: &Cli) -> Result<()> {
         }
 
         crate::AnnouncementsCommands::Read { announcement_id } => {
-            let posts =
-                get_discussion_posts_api(&ctx.client, &ctx.session, *announcement_id).await?;
-
-            if posts.is_empty() {
-                anyhow::bail!("Announcement not found: {}", announcement_id);
-            }
-
-            let first = &posts[0];
+            let messages = get_messages_api(
+                &ctx.client,
+                &ctx.session,
+                ctx.session.user_id,
+                None,
+                None,
+                None,
+            )
+            .await?;
+            let message = messages
+                .iter()
+                .find(|message| message.id == *announcement_id)
+                .ok_or_else(|| anyhow::anyhow!("Announcement not found: {}", announcement_id))?;
             let item = serde_json::json!({
                 "id": announcement_id,
-                "subject": first.subject,
-                "author": first.author,
-                "author_id": first.author_id,
-                "created_at": format_moodle_date(Some(first.created)),
-                "modified_at": format_moodle_date(Some(first.modified)),
-                "message": first.message,
+                "subject": message.subject,
+                "author": format!("User {}", message.useridfrom),
+                "author_id": message.useridfrom,
+                "created_at": format_moodle_date(Some(message.timecreated)),
+                "message": message.text,
             });
 
             format_and_output(&[item], ctx.output, None);

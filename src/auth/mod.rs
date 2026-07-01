@@ -1,7 +1,7 @@
 //! Authentication system: login, session management, token acquisition.
 
 pub mod browser;
-pub mod credentials;
+mod credentials;
 mod microsoft;
 mod token;
 
@@ -11,9 +11,9 @@ pub use browser::{
     set_cookies, Cookie, LaunchedBrowser,
 };
 pub use credentials::StoredCredentials;
-use microsoft::perform_headless_login;
 use token::{extract_token_from_custom_scheme, SessionMeta};
 
+use std::fs;
 use std::path::Path;
 
 use crate::config::AppConfig;
@@ -30,6 +30,41 @@ use futures::StreamExt;
 pub async fn launch_authenticated(
     config: &AppConfig,
     log: &Logger,
+) -> anyhow::Result<(LaunchedBrowser, Option<String>)> {
+    launch_authenticated_with(config, log, None).await
+}
+
+pub async fn launch_authenticated_auto(
+    config: &AppConfig,
+    student_id: &str,
+    password: &str,
+    log: &Logger,
+) -> anyhow::Result<(LaunchedBrowser, Option<String>)> {
+    for attempt in 0..3 {
+        match launch_authenticated_with(config, log, Some((student_id, password))).await {
+            Ok(session) => return Ok(session),
+            Err(error)
+                if attempt < 2
+                    && error
+                        .downcast_ref::<microsoft::SessionExchangeError>()
+                        .is_some() =>
+            {
+                log.warn(&format!(
+                    "Login session exchange failed, retrying with a fresh browser ({}/3).",
+                    attempt + 2
+                ));
+                tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    unreachable!()
+}
+
+async fn launch_authenticated_with(
+    config: &AppConfig,
+    log: &Logger,
+    credentials: Option<(&str, &str)>,
 ) -> anyhow::Result<(LaunchedBrowser, Option<String>)> {
     let browser_candidates = find_browser_paths();
     if browser_candidates.is_empty() {
@@ -49,26 +84,15 @@ pub async fn launch_authenticated(
     let mut launched_opt: Option<LaunchedBrowser> = None;
     let mut last_err: Option<anyhow::Error> = None;
 
-    let headless_modes = if config.headless {
-        vec![true]
-    } else {
-        vec![false]
-    };
-
-    'outer: for &use_headless in &headless_modes {
-        for exe_path in &browser_candidates {
-            match launch_browser(exe_path, use_headless, None).await {
-                Ok(l) => {
-                    launched_opt = Some(l);
-                    break;
-                }
-                Err(e) => {
-                    last_err = Some(anyhow::anyhow!("Launch failed on {}: {}", exe_path, e));
-                }
+    for exe_path in &browser_candidates {
+        match launch_browser(exe_path, credentials.is_some(), None).await {
+            Ok(l) => {
+                launched_opt = Some(l);
+                break;
             }
-        }
-        if launched_opt.is_some() {
-            break 'outer;
+            Err(e) => {
+                last_err = Some(anyhow::anyhow!("Launch failed on {}: {}", exe_path, e));
+            }
         }
     }
     let launched = match launched_opt {
@@ -96,66 +120,40 @@ pub async fn launch_authenticated(
     let session_valid = check_session_valid(&launched.page, &config.moodle_base_url).await;
 
     if session_valid {
-        let ws_token = finalize_session(&launched.page, &mut meta, config, log).await?;
+        let ws_token = match finalize_session(&launched.page, &mut meta, config, log).await {
+            Ok(token) => token,
+            Err(error) => {
+                close_browser(launched).await;
+                return Err(error);
+            }
+        };
         log.success("Session restored successfully.");
         return Ok((launched, ws_token));
     }
 
-    // Session invalid - need to login
-    // Try headless auto-login if credentials are stored and headless mode was requested.
-    let creds = StoredCredentials::load(&config.auth_state_path);
-    if let Some(ref c) = creds {
-        if config.headless {
-            log.info(&format!(
-                "Stored credentials found. Attempting headless login for {}...",
-                c.email()
-            ));
-            match perform_headless_login(&launched.page, &config.moodle_base_url, c, log).await {
-                Ok(()) => {
-                    log.success("Headless login succeeded.");
-                    let ws_token = finalize_session(&launched.page, &mut meta, config, log).await?;
-                    return Ok((launched, ws_token));
-                }
-                Err(e) => {
-                    close_browser(launched).await;
-                    anyhow::bail!("Headless login failed: {}", e);
-                }
-            }
-        } else {
-            log.info(
-                "Stored credentials found, but headed mode was requested. Using interactive login.",
-            );
-        }
-    }
-
-    // No stored credentials - interactive login fallback
-    // If headless, close and relaunch headed
-    if config.headless {
+    let login_result = if let Some((student_id, password)) = credentials {
+        microsoft::perform_headless_login(
+            &launched.page,
+            &config.moodle_base_url,
+            student_id,
+            password,
+            log,
+        )
+        .await
+    } else {
+        perform_login(&launched.page, &config.moodle_base_url, log).await
+    };
+    if let Err(error) = login_result {
         close_browser(launched).await;
-        let browser_candidates = find_browser_paths();
-        if browser_candidates.is_empty() {
-            anyhow::bail!("No browser found (Edge/Chrome/Brave). Please install one.");
-        }
-        let mut relaunched: Option<LaunchedBrowser> = None;
-        for exe_path in &browser_candidates {
-            if let Ok(l) = launch_browser(exe_path, false, None).await {
-                relaunched = Some(l);
-                break;
-            }
-        }
-        let launched = match relaunched {
-            Some(l) => l,
-            None => anyhow::bail!("Failed to relaunch browser in headed mode."),
-        };
-        perform_login(&launched.page, &config.moodle_base_url, log).await?;
-        let ws_token = finalize_session(&launched.page, &mut meta, config, log).await?;
-
-        return Ok((launched, ws_token));
+        return Err(error);
     }
-
-    // Already headed, just login
-    perform_login(&launched.page, &config.moodle_base_url, log).await?;
-    let ws_token = finalize_session(&launched.page, &mut meta, config, log).await?;
+    let ws_token = match finalize_session(&launched.page, &mut meta, config, log).await {
+        Ok(token) => token,
+        Err(error) => {
+            close_browser(launched).await;
+            return Err(error);
+        }
+    };
 
     Ok((launched, ws_token))
 }
@@ -203,10 +201,10 @@ async fn finalize_session(
 
     // Save cookies
     if let Ok(cookies) = get_cookies(page).await {
-        save_cookies(&config.auth_state_path, &cookies);
+        save_cookies(&config.auth_state_path, &cookies)?;
     }
 
-    meta.save(&config.auth_state_path);
+    meta.save(&config.auth_state_path)?;
     Ok(ws_token)
 }
 
@@ -382,8 +380,8 @@ async fn save_user_id(meta: &mut SessionMeta, ws_token: &str, base_url: &str, _l
     }
 }
 
-/// Remove saved browser/API session files. Optionally keep stored credentials.
-pub fn clear_saved_session(config: &AppConfig, clear_credentials: bool) {
+/// Remove saved browser/API session files.
+pub fn clear_saved_session(config: &AppConfig) {
     let auth_state_path = Path::new(&config.auth_state_path);
     if auth_state_path.exists() {
         let _ = std::fs::remove_file(auth_state_path);
@@ -400,8 +398,11 @@ pub fn clear_saved_session(config: &AppConfig, clear_credentials: bool) {
         let _ = std::fs::remove_file(meta_path);
     }
 
-    if clear_credentials {
-        StoredCredentials::delete(&config.auth_state_path);
+    if let Some(auth_dir) = auth_state_path.parent() {
+        let legacy_credentials = auth_dir.join("credentials.json");
+        if legacy_credentials.exists() {
+            let _ = std::fs::remove_file(legacy_credentials);
+        }
     }
 
     let user_data_dir = get_user_data_dir(&config.auth_state_path);
@@ -420,9 +421,10 @@ pub fn check_session_status(config: &AppConfig) -> (bool, Option<String>) {
     (has_session, ws_token)
 }
 
-/// Remove saved session files.
-pub fn logout(config: &AppConfig) {
-    clear_saved_session(config, true);
+/// Remove saved session files and automatic-login credentials.
+pub fn logout(config: &AppConfig) -> anyhow::Result<()> {
+    clear_saved_session(config);
+    StoredCredentials::delete()
 }
 
 /// Launch a browser session using saved cookies (clean profile).
@@ -514,39 +516,57 @@ pub async fn launch_persistent_session(
         return Ok(launched);
     }
 
-    // All session-restore attempts failed — try headless re-login if credentials exist
-    let creds = StoredCredentials::load(&config.auth_state_path);
-    if let Some(ref c) = creds {
-        log.info(&format!(
-            "Session expired. Attempting headless re-login for {}...",
-            c.email()
-        ));
-        for exe_path in &browser_candidates {
-            if let Ok(launched) = launch_browser(exe_path, true, None).await {
-                match perform_headless_login(&launched.page, &config.moodle_base_url, c, log).await
-                {
-                    Ok(()) => {
-                        log.success("Headless re-login succeeded.");
-                        if let Ok(cookies) = get_cookies(&launched.page).await {
-                            save_cookies(&config.auth_state_path, &cookies);
+    match StoredCredentials::load() {
+        Ok(Some(credentials)) => {
+            log.info("Session expired. Attempting automatic login...");
+            for attempt in 0..2 {
+                for exe_path in &browser_candidates {
+                    let Ok(launched) = launch_browser(exe_path, true, None).await else {
+                        continue;
+                    };
+                    match microsoft::perform_headless_login(
+                        &launched.page,
+                        &config.moodle_base_url,
+                        &credentials.id,
+                        &credentials.password,
+                        log,
+                    )
+                    .await
+                    {
+                        Ok(()) => {
+                            let mut meta = SessionMeta::load(&config.auth_state_path);
+                            if let Err(error) =
+                                finalize_session(&launched.page, &mut meta, config, log).await
+                            {
+                                close_browser(launched).await;
+                                return Err(error);
+                            }
+                            log.success("Automatic login succeeded.");
+                            return Ok(launched);
                         }
-                        log.info("Browser session restored via re-login.");
-                        return Ok(launched);
+                        Err(error) => {
+                            log.warn(&format!("Automatic login failed: {error}"));
+                            close_browser(launched).await;
+                            if error
+                                .downcast_ref::<microsoft::SessionExchangeError>()
+                                .is_none()
+                            {
+                                return Err(error);
+                            }
+                        }
                     }
-                    Err(e) => {
-                        log.warn(&format!(
-                            "Headless re-login failed with {}: {}",
-                            exe_path, e
-                        ));
-                        close_browser(launched).await;
-                    }
+                }
+                if attempt == 0 {
+                    log.info("Retrying automatic login with a fresh browser...");
+                    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
                 }
             }
         }
-        log.warn("Headless re-login failed with all browser candidates.");
+        Ok(None) => {}
+        Err(error) => log.warn(&format!("Could not read OS credential store: {error}")),
     }
 
-    anyhow::bail!("Browser session expired and headless re-login failed. Run `openape login` to re-authenticate.")
+    anyhow::bail!("Browser session expired. Run `openape login` to re-authenticate.")
 }
 
 /// Close a browser session.
@@ -562,14 +582,40 @@ fn get_cookies_path(auth_state_path: &str) -> std::path::PathBuf {
     dir.join("cookies.json")
 }
 
-fn save_cookies(auth_state_path: &str, cookies: &[Cookie]) {
+fn save_cookies(auth_state_path: &str, cookies: &[Cookie]) -> anyhow::Result<()> {
     let path = get_cookies_path(auth_state_path);
-    if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
+    let json = serde_json::to_string_pretty(cookies)?;
+    write_secret_file(&path, json.as_bytes())?;
+    Ok(())
+}
+
+fn write_secret_file(path: &Path, contents: &[u8]) -> std::io::Result<()> {
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        fs::create_dir_all(parent)?;
+        #[cfg(unix)]
+        fs::set_permissions(parent, std::os::unix::fs::PermissionsExt::from_mode(0o700))?;
     }
-    if let Ok(json) = serde_json::to_string_pretty(cookies) {
-        let _ = std::fs::write(&path, json);
+
+    #[cfg(unix)]
+    {
+        use std::io::Write;
+        use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+
+        let mut file = fs::OpenOptions::new()
+            .create(true)
+            .write(true)
+            .mode(0o600)
+            .open(path)?;
+        file.set_permissions(fs::Permissions::from_mode(0o600))?;
+        file.set_len(0)?;
+        file.write_all(contents)
     }
+
+    #[cfg(not(unix))]
+    fs::write(path, contents)
 }
 
 pub fn load_cookies(auth_state_path: &str) -> anyhow::Result<Vec<Cookie>> {
@@ -590,5 +636,42 @@ pub fn load_cookie_header(auth_state_path: &str, target_url: &str) -> Option<Str
         None
     } else {
         Some(header)
+    }
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    use super::write_secret_file;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn secret_writer_tightens_existing_permissions() {
+        let root = std::env::temp_dir().join(format!(
+            "openape-secret-writer-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let auth_dir = root.join(".auth");
+        let secret = auth_dir.join("secret.json");
+        std::fs::create_dir_all(&auth_dir).unwrap();
+        std::fs::set_permissions(&auth_dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(&secret, b"old").unwrap();
+        std::fs::set_permissions(&secret, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        write_secret_file(&secret, b"new").unwrap();
+
+        assert_eq!(std::fs::read(&secret).unwrap(), b"new");
+        assert_eq!(
+            std::fs::metadata(&auth_dir).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+        assert_eq!(
+            std::fs::metadata(&secret).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

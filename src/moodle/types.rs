@@ -308,6 +308,7 @@ pub struct Message {
     pub subject: String,
     pub text: String,
     pub timecreated: i64,
+    pub read: bool,
 }
 
 // ── Pages ──────────────────────────────────────────────────────────────────

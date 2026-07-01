@@ -62,22 +62,12 @@ struct Cli {
 
     #[arg(long, global = true)]
     silent: bool,
-
-    #[arg(long, global = true)]
-    headed: bool,
 }
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Login to iLearning manually and save session
-    Login {
-        /// Student ID for headless login (e.g. 11144238)
-        #[arg(long)]
-        id: Option<String>,
-        /// Password (prompted if --id provided without --password)
-        #[arg(long)]
-        password: Option<String>,
-    },
+    /// Login to iLearning and save session
+    Login,
     /// Check session status
     Status,
     /// Remove saved session
@@ -113,14 +103,7 @@ enum Commands {
 #[derive(Subcommand)]
 pub enum AuthCommands {
     /// Login to iLearning and save session
-    Login {
-        /// Student ID for headless login (e.g. 11144238)
-        #[arg(long)]
-        id: Option<String>,
-        /// Password (prompted if --id provided without --password)
-        #[arg(long)]
-        password: Option<String>,
-    },
+    Login,
     /// Check session status
     Status,
     /// Remove saved session
@@ -364,7 +347,7 @@ pub enum CalendarCommands {
     /// Export calendar events to file
     Export {
         #[arg(long, default_value = "./calendar.json")]
-        output: PathBuf,
+        output_file: PathBuf,
         #[arg(long, default_value = "30")]
         days: u32,
     },
@@ -458,19 +441,7 @@ fn main() {
 
 async fn run_command(cli: Cli) -> anyhow::Result<()> {
     match cli.command {
-        Commands::Login {
-            ref id,
-            ref password,
-        } => {
-            commands::auth::run(
-                &AuthCommands::Login {
-                    id: id.clone(),
-                    password: password.clone(),
-                },
-                &cli,
-            )
-            .await
-        }
+        Commands::Login => commands::auth::run(&AuthCommands::Login, &cli).await,
         Commands::Status => commands::auth::run(&AuthCommands::Status, &cli).await,
         Commands::Logout => commands::auth::run(&AuthCommands::Logout, &cli).await,
         Commands::Courses(ref cmd) => commands::courses::run(cmd, &cli).await,

@@ -7,72 +7,48 @@ use std::collections::HashMap;
 /// `courseids[0]=1&courseids[1]=2` and `options[0][name]=x&options[0][value]=y`.
 /// Also handles nested objects for Moodle single_structure params:
 /// `events[courseids][0]=1&events[courseids][1]=2` and `options[timestart]=123`.
-pub fn build_ws_params(args: &HashMap<String, Value>) -> String {
-    let mut parts = Vec::new();
-
+pub fn build_ws_params(args: &HashMap<String, Value>) -> Vec<(String, String)> {
+    let mut params = Vec::new();
     for (key, value) in args {
-        match value {
-            Value::Array(arr) if key == "options" => {
-                for (i, opt) in arr.iter().enumerate() {
-                    if let (Some(name), Some(val)) = (opt.get("name"), opt.get("value")) {
-                        parts.push(format!("{}[{}][name]={}", key, i, name));
-                        parts.push(format!("{}[{}][value]={}", key, i, val));
-                    }
-                }
-            }
-            Value::Array(arr) => {
-                for (i, v) in arr.iter().enumerate() {
-                    let s = match v {
-                        Value::String(s) => s.clone(),
-                        other => other.to_string(),
-                    };
-                    parts.push(format!("{}[{}]={}", key, i, s));
-                }
-            }
-            Value::Object(obj) => {
-                // Nested object (e.g., events[courseids][0]=1, options[timestart]=123)
-                for (sub_key, sub_val) in obj {
-                    match sub_val {
-                        Value::Array(arr) => {
-                            for (i, v) in arr.iter().enumerate() {
-                                let s = match v {
-                                    Value::String(s) => s.clone(),
-                                    other => other.to_string(),
-                                };
-                                parts.push(format!("{}[{}][{}]={}", key, sub_key, i, s));
-                            }
-                        }
-                        Value::Null => {}
-                        other => {
-                            parts.push(format!("{}[{}]={}", key, sub_key, other));
-                        }
-                    }
-                }
-            }
-            Value::Null => {}
-            Value::String(s) => {
-                parts.push(format!("{}={}", key, s));
-            }
-            other => {
-                parts.push(format!("{}={}", key, other));
-            }
-        }
+        push_ws_param(&mut params, key.clone(), value);
     }
-
-    parts.join("&")
+    params
 }
 
-fn build_ws_url(
+fn push_ws_param(params: &mut Vec<(String, String)>, key: String, value: &Value) {
+    match value {
+        Value::Array(values) => {
+            for (index, value) in values.iter().enumerate() {
+                push_ws_param(params, format!("{key}[{index}]"), value);
+            }
+        }
+        Value::Object(values) => {
+            for (name, value) in values {
+                push_ws_param(params, format!("{key}[{name}]"), value);
+            }
+        }
+        Value::Null => {}
+        Value::String(value) => params.push((key, value.clone())),
+        value => params.push((key, value.to_string())),
+    }
+}
+
+fn build_ws_request(
+    client: &Client,
     base_url: &str,
     ws_token: &str,
     function: &str,
     args: &HashMap<String, Value>,
-) -> String {
-    let params = build_ws_params(args);
-    format!(
-        "{}/webservice/rest/server.php?wstoken={}&wsfunction={}&moodlewsrestformat=json&{}",
-        base_url, ws_token, function, params
-    )
+) -> Result<reqwest::Request, reqwest::Error> {
+    client
+        .get(format!("{base_url}/webservice/rest/server.php"))
+        .query(&[
+            ("wstoken", ws_token),
+            ("wsfunction", function),
+            ("moodlewsrestformat", "json"),
+        ])
+        .query(&build_ws_params(args))
+        .build()
 }
 
 async fn check_ws_response(result: Value, function: &str) -> Result<Value, MoodleError> {
@@ -114,13 +90,12 @@ pub async fn moodle_api_call(
     function: &str,
     args: &HashMap<String, Value>,
 ) -> Result<Value, MoodleError> {
-    let url = build_ws_url(base_url, ws_token, function, args);
-    let result: Value = client.get(&url).send().await?.json().await?;
+    let request = build_ws_request(client, base_url, ws_token, function, args)?;
+    let result: Value = client.execute(request).await?.json().await?;
     check_ws_response(result, function).await
 }
 
-/// Like `moodle_api_call` but injects the SEB ConfigKeyHash header.
-/// Hash is computed as SHA256(requestURL + config_key), matching SEB browser behavior.
+/// Moodle Web Service call with an SEB ConfigKeyHash computed from the encoded URL.
 pub async fn moodle_api_call_seb(
     client: &Client,
     base_url: &str,
@@ -130,15 +105,15 @@ pub async fn moodle_api_call_seb(
     seb_config_key: &str,
 ) -> Result<Value, MoodleError> {
     use crate::moodle::seb::compute_config_key_hash;
-    let url = build_ws_url(base_url, ws_token, function, args);
-    let hash = compute_config_key_hash(&url, seb_config_key);
-    let result: Value = client
-        .get(&url)
-        .header("X-SafeExamBrowser-ConfigKeyHash", hash)
-        .send()
-        .await?
-        .json()
-        .await?;
+    use reqwest::header::{HeaderName, HeaderValue};
+
+    let mut request = build_ws_request(client, base_url, ws_token, function, args)?;
+    let hash = compute_config_key_hash(request.url().as_str(), seb_config_key);
+    request.headers_mut().insert(
+        HeaderName::from_static("x-safeexambrowser-configkeyhash"),
+        HeaderValue::from_bytes(hash.as_bytes()).expect("SHA-256 hex is a valid HTTP header value"),
+    );
+    let result: Value = client.execute(request).await?.json().await?;
     check_ws_response(result, function).await
 }
 
@@ -152,4 +127,48 @@ macro_rules! moodle_args {
         )*
         m
     }};
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn ws_params_percent_encode_values_and_preserve_nested_keys() {
+        let value = "one&forged=two+three#four%五";
+        let args = HashMap::from([
+            ("courseids".to_string(), json!([value])),
+            (
+                "options".to_string(),
+                json!([{"name": value, "value": value}]),
+            ),
+            (
+                "events".to_string(),
+                json!({"courseids": [value], "filter": {"name": value}}),
+            ),
+        ]);
+
+        let request = build_ws_request(
+            &Client::new(),
+            "https://example.com",
+            "token",
+            "test_function",
+            &args,
+        )
+        .unwrap();
+        let params: HashMap<_, _> = request.url().query_pairs().into_owned().collect();
+
+        assert_eq!(params.len(), 8);
+        for key in [
+            "courseids[0]",
+            "options[0][name]",
+            "options[0][value]",
+            "events[courseids][0]",
+            "events[filter][name]",
+        ] {
+            assert_eq!(params.get(key).map(String::as_str), Some(value));
+        }
+        assert!(!params.contains_key("forged"));
+    }
 }

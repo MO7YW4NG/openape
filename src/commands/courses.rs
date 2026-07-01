@@ -79,7 +79,7 @@ pub async fn run(cmd: &crate::CoursesCommands, cli: &Cli) -> Result<()> {
                 .find(|c| c.id == *course_id)
                 .ok_or_else(|| anyhow::anyhow!("Course not found: {}", course_id))?;
 
-            let syllabus = fetch_syllabus(&ctx.client, &course.shortname).await;
+            let syllabus = fetch_syllabus(&course.shortname).await;
 
             let mut result = serde_json::json!({
                 "courseId": course.id,
@@ -117,7 +117,7 @@ pub async fn run(cmd: &crate::CoursesCommands, cli: &Cli) -> Result<()> {
 }
 
 /// Fetch course syllabus from CYCU CMAP GWT-RPC endpoint.
-async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<serde_json::Value> {
+async fn fetch_syllabus(shortname: &str) -> Option<serde_json::Value> {
     let parts: Vec<&str> = shortname.splitn(2, '_').collect();
     if parts.len() < 2 {
         return None;
@@ -131,7 +131,7 @@ async fn fetch_syllabus(client: &reqwest::Client, shortname: &str) -> Option<ser
         year_term, op_code
     );
 
-    let resp = client
+    let resp = reqwest::Client::new()
         .post("https://cmap.cycu.edu.tw:8443/Syllabus/syllabus/syllabusClientService")
         .header("X-GWT-Permutation", "339796D6E7B561A6465F5E9B5F4943FA")
         .header("Accept", "text/x-gwt-rpc, */*; q=0.01")
