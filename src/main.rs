@@ -148,7 +148,7 @@ pub enum VideosCommands {
         #[arg(long)]
         force: bool,
     },
-    /// Complete all incomplete videos across all courses
+    /// Complete videos across all in-progress courses
     CompleteAll {
         #[arg(long)]
         dry_run: bool,

@@ -147,7 +147,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 if *force { "all" } else { "incomplete" }
             ));
 
-            let mut all_incomplete = Vec::new();
+            let mut videos_to_complete = Vec::new();
             for course in &courses {
                 let videos = if *force {
                     get_supervideos_in_course_api(&ctx.client, &ctx.session, course.id).await
@@ -156,14 +156,14 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 };
                 if let Ok(videos) = videos {
                     for v in videos {
-                        all_incomplete.push((course.fullname.clone(), v));
+                        videos_to_complete.push((course.fullname.clone(), v));
                     }
                 }
             }
 
-            let total = all_incomplete.len();
+            let total = videos_to_complete.len();
 
-            if all_incomplete.is_empty() {
+            if videos_to_complete.is_empty() {
                 ctx.log.info(if *force {
                     "No videos found."
                 } else {
@@ -192,7 +192,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             ));
 
             if *dry_run {
-                for (cname, v) in &all_incomplete {
+                for (cname, v) in &videos_to_complete {
                     ctx.log
                         .info(&format!("  [dry-run] [{}]: {}", cname, v.name));
                 }
@@ -210,7 +210,7 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             }
 
             let mut completed = 0;
-            for (cname, v) in &all_incomplete {
+            for (cname, v) in &videos_to_complete {
                 ctx.log.info(&format!("Processing [{}]: {}", cname, v.name));
 
                 let metadata = match get_video_metadata_http(
