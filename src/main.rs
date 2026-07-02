@@ -144,11 +144,17 @@ pub enum VideosCommands {
         course_id: u64,
         #[arg(long)]
         dry_run: bool,
+        /// Re-send watch progress for every video, including ones already complete
+        #[arg(long)]
+        force: bool,
     },
-    /// Complete all incomplete videos across all courses
+    /// Complete videos across all in-progress courses
     CompleteAll {
         #[arg(long)]
         dry_run: bool,
+        /// Re-send watch progress for every video, including ones already complete
+        #[arg(long)]
+        force: bool,
     },
     /// Download a specific video by cmid
     Download {

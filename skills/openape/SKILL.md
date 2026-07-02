@@ -59,8 +59,8 @@ the user wants to inspect the exact content.
 ### videos — Video progress operations
 
   - `list <course-id>` — List videos in a course. Flags: `--incomplete-only`
-  - `complete <course-id>` — Complete all videos in a course
-  - `complete-all` — Complete all incomplete videos across all courses. Flags: `--dry-run`
+  - `complete <course-id>` — Complete videos in a course. Flags: `--dry-run`, `--force` (include already-complete videos and re-send watch progress)
+  - `complete-all` — Complete videos across all in-progress courses. Flags: `--dry-run`, `--force` (include already-complete videos and re-send watch progress)
   - `download <cmid>` — Download one video. Flags: `--course-id <id>`, `--output-dir <path>`
   - `download-all <course-id>` — Download all videos from a course. Flags: `--output-dir <path>`, `--incomplete-only`
 

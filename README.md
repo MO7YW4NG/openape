@@ -49,8 +49,8 @@ openape courses syllabus <id>      # 顯示課程大綱
 ### 影片 (Videos)
 ```bash
 openape videos list <course-id> [--incomplete-only]          # 列出課程中的影片
-openape videos complete <course-id> [--dry-run]              # 完成課程中的所有影片
-openape videos complete-all [--dry-run]                      # 完成所有課程中的未完成影片
+openape videos complete <course-id> [--dry-run] [--force]    # 完成課程中的所有影片 (--force 連已完成的影片也重送觀看時長)
+openape videos complete-all [--dry-run] [--force]            # 完成所有課程中的未完成影片 (--force 連已完成的影片也重送觀看時長)
 openape videos download <cmid> [--course-id <id>] [--output-dir <path>] # 下載單一影片
 openape videos download-all <course-id> [--output-dir <path>] [--incomplete-only] # 下載課程影片
 ```
