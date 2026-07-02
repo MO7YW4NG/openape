@@ -244,21 +244,36 @@ pub async fn get_video_metadata_http(
         .or_else(|| view_id_re2.captures(&html))
         .and_then(|c| c[1].parse::<u64>().ok());
 
+    let (video_sources, youtube_ids) = extract_video_sources_from_html(&html, log);
+
     let duration_re = regex::Regex::new(r#"["']?duration["']?\s*[:=]\s*(\d+)"#).unwrap();
-    let duration = duration_re
+    let mut duration = duration_re
         .captures(&html)
-        .and_then(|c| c[1].parse::<u64>().ok())
-        .unwrap_or_else(|| {
-            log.debug("Duration unknown (HTTP fetch), using 600s");
-            600
-        });
+        .and_then(|c| c[1].parse::<u64>().ok());
+
+    // The HTML rarely carries the real length, so probe the MP4's moov/mvhd atom
+    // directly. This keeps the recorded watch time honest instead of the 600s default.
+    if duration.is_none() {
+        if let Some(mp4) = video_sources
+            .iter()
+            .find(|s| s.contains("pluginfile.php") || s.ends_with(".mp4"))
+        {
+            if let Some(d) = probe_mp4_duration_http(client, mp4).await {
+                log.debug(&format!("Probed mp4 moov duration: {}s", d));
+                duration = Some(d);
+            }
+        }
+    }
+
+    let duration = duration.unwrap_or_else(|| {
+        log.debug("Duration unknown (HTTP fetch), using 600s");
+        600
+    });
 
     log.debug(&format!(
         "view_id={:?}, duration={}s (HTTP)",
         view_id, duration
     ));
-
-    let (video_sources, youtube_ids) = extract_video_sources_from_html(&html, log);
 
     Ok(VideoMetadata {
         video_sources,
@@ -299,6 +314,13 @@ fn extract_video_sources_from_html(html: &str, log: &Logger) -> (Vec<String>, Ve
         }
     }
 
+    // 4. data-videourl="..." (supervideo builds its player from this attribute via JS,
+    //    so the URL never appears inside a <source>/<video> tag in the server HTML)
+    let data_url_re = regex::Regex::new(r#"data-videourl=["']([^"']+)["']"#).unwrap();
+    for cap in data_url_re.captures_iter(html) {
+        video_sources.push(cap[1].to_string());
+    }
+
     video_sources.dedup();
 
     log.debug(&format!(
@@ -307,6 +329,77 @@ fn extract_video_sources_from_html(html: &str, log: &Logger) -> (Vec<String>, Ve
         youtube_ids.len()
     ));
     (video_sources, youtube_ids)
+}
+
+/// Fetch a byte range [start, start+len) from `url` using the shared client.
+async fn range_bytes(client: &Client, url: &str, start: u64, len: u64) -> Option<Vec<u8>> {
+    let resp = client
+        .get(url)
+        .header("Range", format!("bytes={}-{}", start, start + len - 1))
+        .send()
+        .await
+        .ok()?;
+    if !resp.status().is_success() {
+        return None;
+    }
+    Some(resp.bytes().await.ok()?.to_vec())
+}
+
+/// Parse the duration (seconds) out of an MP4 `mvhd` atom contained in `buf`.
+fn parse_mvhd_duration(buf: &[u8]) -> Option<u64> {
+    let pos = buf.windows(4).position(|w| w == b"mvhd")?;
+    let version = *buf.get(pos + 4)?;
+    // mvhd layout after the "mvhd" fourcc: version(1) flags(3) then
+    // v0: creation(4) modified(4) timescale(4) duration(4)
+    // v1: creation(8) modified(8) timescale(4) duration(8)
+    let (ts_off, dur_off, dur_is_64) = if version == 1 {
+        (pos + 24, pos + 28, true)
+    } else {
+        (pos + 16, pos + 20, false)
+    };
+    let timescale = u32::from_be_bytes(buf.get(ts_off..ts_off + 4)?.try_into().ok()?) as u64;
+    if timescale == 0 {
+        return None;
+    }
+    let duration = if dur_is_64 {
+        u64::from_be_bytes(buf.get(dur_off..dur_off + 8)?.try_into().ok()?)
+    } else {
+        u32::from_be_bytes(buf.get(dur_off..dur_off + 4)?.try_into().ok()?) as u64
+    };
+    Some(duration / timescale)
+}
+
+/// Probe an MP4's duration (seconds) via ranged HTTP reads of its moov/mvhd atom.
+///
+/// Walks the top-level boxes reading only each 16-byte header and skipping by size,
+/// so the large `mdat` payload is never downloaded even when `moov` sits at the end.
+pub async fn probe_mp4_duration_http(client: &Client, url: &str) -> Option<u64> {
+    let mut offset: u64 = 0;
+    for _ in 0..64 {
+        let hdr = range_bytes(client, url, offset, 16).await?;
+        if hdr.len() < 8 {
+            return None;
+        }
+        let mut size = u32::from_be_bytes(hdr[0..4].try_into().ok()?) as u64;
+        let btype = &hdr[4..8];
+        if size == 1 {
+            // 64-bit largesize follows the 8-byte header
+            size = u64::from_be_bytes(hdr[8..16].try_into().ok()?);
+        } else if size == 0 {
+            // box runs to end of file; nothing else to walk
+            return None;
+        }
+        if btype == b"moov" {
+            // mvhd is the first child of moov; a small head is enough to parse it
+            let head = range_bytes(client, url, offset, size.min(8192)).await?;
+            return parse_mvhd_duration(&head);
+        }
+        if size < 8 {
+            return None;
+        }
+        offset += size;
+    }
+    None
 }
 
 /// Extract video metadata from a supervideo page using an authenticated browser.
