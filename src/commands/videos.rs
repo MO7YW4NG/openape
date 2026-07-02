@@ -42,13 +42,24 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             format_and_output(&items, ctx.output, None);
         }
 
-        crate::VideosCommands::Complete { course_id, dry_run } => {
-            let videos = get_incomplete_videos_api(&ctx.client, &ctx.session, *course_id).await?;
+        crate::VideosCommands::Complete {
+            course_id,
+            dry_run,
+            force,
+        } => {
+            let videos = if *force {
+                get_supervideos_in_course_api(&ctx.client, &ctx.session, *course_id).await?
+            } else {
+                get_incomplete_videos_api(&ctx.client, &ctx.session, *course_id).await?
+            };
             let total = videos.len();
 
             if videos.is_empty() {
-                ctx.log
-                    .info("All videos already complete (or no videos found).");
+                ctx.log.info(if *force {
+                    "No videos found."
+                } else {
+                    "All videos already complete (or no videos found)."
+                });
                 let result = serde_json::json!({
                     "action": "complete",
                     "course_id": *course_id,
@@ -61,7 +72,12 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
                 return Ok(());
             }
 
-            ctx.log.info(&format!("Found {} incomplete videos", total));
+            if *force {
+                ctx.log
+                    .info(&format!("Found {} videos (re-sending progress)", total));
+            } else {
+                ctx.log.info(&format!("Found {} incomplete videos", total));
+            }
 
             if *dry_run {
                 for v in &videos {
@@ -123,18 +139,22 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             format_and_output(&[result], ctx.output, None);
         }
 
-        crate::VideosCommands::CompleteAll { dry_run } => {
+        crate::VideosCommands::CompleteAll { dry_run, force } => {
             let courses = get_enrolled_courses_api(&ctx.client, &ctx.session, "inprogress").await?;
             ctx.log.info(&format!(
-                "Scanning {} courses for incomplete videos...",
-                courses.len()
+                "Scanning {} courses for {} videos...",
+                courses.len(),
+                if *force { "all" } else { "incomplete" }
             ));
 
             let mut all_incomplete = Vec::new();
             for course in &courses {
-                if let Ok(videos) =
+                let videos = if *force {
+                    get_supervideos_in_course_api(&ctx.client, &ctx.session, course.id).await
+                } else {
                     get_incomplete_videos_api(&ctx.client, &ctx.session, course.id).await
-                {
+                };
+                if let Ok(videos) = videos {
                     for v in videos {
                         all_incomplete.push((course.fullname.clone(), v));
                     }
@@ -144,7 +164,11 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             let total = all_incomplete.len();
 
             if all_incomplete.is_empty() {
-                ctx.log.info("No incomplete videos found.");
+                ctx.log.info(if *force {
+                    "No videos found."
+                } else {
+                    "No incomplete videos found."
+                });
                 let result = serde_json::json!({
                     "action": "complete_all",
                     "courses_scanned": courses.len(),
@@ -158,8 +182,13 @@ pub async fn run(cmd: &crate::VideosCommands, cli: &Cli) -> Result<()> {
             }
 
             ctx.log.info(&format!(
-                "Found {} incomplete videos across all courses",
-                total
+                "Found {} {} across all courses",
+                total,
+                if *force {
+                    "videos (re-sending progress)"
+                } else {
+                    "incomplete videos"
+                }
             ));
 
             if *dry_run {
